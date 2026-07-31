@@ -33,11 +33,16 @@ def confirm_candidate(candidate_id: str, candidates_store: Dict[str, dict], albu
     checked_at = demo_clock.now_iso()
 
     # 5~7. Calendar busy 시간 재조회 -> 기존 결정론 충돌 함수(policy.is_slot_busy) 재사용 -> 충돌 시 409.
-    # 이 재확인의 calendarMode는 이 응답의 calendarMode(아래 create_event 성공 여부)와 무관하다 -
-    # 실제 사용 모드/사유는 여기서 쓰지 않는다(이벤트 생성 로직은 이번 작업 범위 밖).
-    busy_times, _actual_calendar_mode, _calendar_fallback_reason = calendar_service.get_busy_times(
+    busy_times, actual_calendar_mode, calendar_fallback_reason = calendar_service.get_busy_times(
         album_id, modes.calendar_mode, candidate["start"], candidate["end"]
     )
+    # 예약 확정 직전 안전성 검증이다 - /analyses·/schedule·/retry의 읽기 fallback 정책(LIVE 실패 시
+    # CACHED로 조용히 대체)과 달리, LIVE를 요청했는데 실제로 CACHED로 대체됐다면 그 CACHED busy
+    # 데이터로 조용히 확정하지 않는다. 안전하게 실패시키고 candidate는 PREPARED로 유지한다.
+    if modes.calendar_mode == "LIVE" and actual_calendar_mode != "LIVE":
+        raise external_service_error(
+            f"Google Calendar 재확인에 실패해 예약을 확정할 수 없습니다: {calendar_fallback_reason}"
+        )
     conflict = policy.is_slot_busy(candidate["start"], candidate["end"], busy_times)
     if conflict:
         conflicting = policy.find_conflicting_busy_times(candidate["start"], candidate["end"], busy_times)

@@ -130,8 +130,10 @@ def schedule_analysis(analysis_id: str) -> ScheduleResponse:
     )
 
     store.schedules[analysis_id] = response.model_dump()
+    # analysisId는 Candidate API 계약에는 없다 - LIVE confirm이 Calendar 이벤트의
+    # extendedProperties.private.analysisId에 쓸 수 있도록 저장소 내부 dict에만 덧붙인다.
     for candidate in response.candidates:
-        store.candidates[candidate.candidateId] = candidate.model_dump()
+        store.candidates[candidate.candidateId] = {**candidate.model_dump(), "analysisId": analysis_id}
     return response
 
 
@@ -169,7 +171,7 @@ def retry_analysis(analysis_id: str, payload: RetryRequest) -> RetryResponse:
 
     # 13. 기존 schedule 후보는 삭제/덮어쓰지 않는다 - candidates만 store.candidates에 추가한다.
     for candidate in response.candidates:
-        store.candidates[candidate.candidateId] = candidate.model_dump()
+        store.candidates[candidate.candidateId] = {**candidate.model_dump(), "analysisId": analysis_id}
     return response
 
 

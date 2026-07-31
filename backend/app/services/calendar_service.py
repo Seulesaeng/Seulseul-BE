@@ -9,10 +9,14 @@
 # calendars().get()은 호출하지 않는다 - SCOPES(calendar.events, calendar.freebusy)만으로는
 # 403 insufficient authentication scopes가 발생한다.
 #
-# POST /api/bookings/{id}/confirm의 실제 Calendar 이벤트 생성(create_event)은 이 작업 범위 밖이다
-# (CLAUDE.md 구현 순서 9단계 중 이벤트 생성 부분) - 항상 실패하는 기존 동작을 그대로 유지한다.
+# POST /api/bookings/{id}/confirm의 실제 Calendar 이벤트 생성(create_event)은 CALENDAR_MODE=LIVE일 때
+# events().insert()로 이벤트를 1개 만든다. 같은 candidate로 두 번 만들지 않도록 candidate_id에서
+# 결정론적 Google event ID를 만들어 쓴다 - insert가 성공 후 저장 전에 죽어도, 다음 confirm 시도가
+# 같은 event ID로 다시 insert를 호출하면 Google이 409를 반환하고, 그 이벤트가 정말 같은 candidate의
+# 것인지 extendedProperties.private.candidateId로 확인해 안전하게 재사용한다.
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -23,6 +27,14 @@ from app.models.schemas import UpcomingEvent
 
 CALENDAR_LIVE_EVENTS_FAILED_REASON = "CALENDAR_LIVE_EVENTS_FAILED"
 CALENDAR_LIVE_BUSY_FAILED_REASON = "CALENDAR_LIVE_BUSY_FAILED"
+
+EVENT_SUMMARY = "슬슬 · 네일 예약"
+EVENT_DESCRIPTION = (
+    "슬슬 데모에서 생성한 캘린더 일정입니다.\n"
+    "실제 네일샵 예약 완료 여부는 해당 매장에 별도로 확인해야 합니다."
+)
+EVENT_SOURCE_TAG = "seulseul-demo"
+EVENT_ID_PREFIX = "sls"  # Google event ID는 base32hex(0-9, a-v)만 허용한다.
 
 # 중요 일정 키워드: 이 프로젝트에 별도 정책 함수가 없으므로 요청받은 키워드를 그대로 사용한다.
 # CACHED 경로는 이 키워드를 쓰지 않는다 - fixture의 careRelevant 플래그를 그대로 쓰는 기존 동작 유지.
@@ -187,9 +199,65 @@ def get_busy_times(
     return busy.get(album_id, []), calendar_mode, None
 
 
+def _deterministic_event_id(candidate_id: str) -> str:
+    """candidate_id로부터 항상 같은 Google event ID를 만든다(재confirm 시 같은 이벤트를 안전하게
+    식별/재사용하기 위함). Python 내장 hash()는 실행마다 값이 달라질 수 있어 쓰지 않고,
+    sha256은 항상 같은 결과를 낸다. hexdigest()의 0-9a-f는 이미 Google이 요구하는
+    base32hex(0-9,a-v) 문자 범위의 부분집합이라 candidate_id에 밑줄/하이픈이 있어도 안전하다."""
+    digest = hashlib.sha256(candidate_id.encode()).hexdigest()
+    return f"{EVENT_ID_PREFIX}{digest[:40]}"
+
+
+def _build_event_body(candidate: dict) -> dict:
+    location = candidate.get("shop", "")
+    address = candidate.get("address")
+    if address:
+        location = f"{location} {address}"
+    tz = _app_timezone()
+    return {
+        "id": _deterministic_event_id(candidate["candidateId"]),
+        "summary": EVENT_SUMMARY,
+        "description": EVENT_DESCRIPTION,
+        "location": location,
+        "start": {"dateTime": candidate["start"], "timeZone": tz},
+        "end": {"dateTime": candidate["end"], "timeZone": tz},
+        "extendedProperties": {
+            "private": {
+                "source": EVENT_SOURCE_TAG,
+                "candidateId": candidate["candidateId"],
+                "analysisId": candidate.get("analysisId", ""),
+            }
+        },
+    }
+
+
 def create_event(candidate: dict, calendar_mode: str) -> dict:
-    """CALENDAR_MODE=LIVE일 때 실제 Google Calendar에 이벤트를 생성한다
-    (POST /api/bookings/{id}/confirm 전용, Agent Tool 아님).
-    실제 이벤트 생성 연동은 이번 작업 범위 밖이다 - 지금은 항상 실패한다.
-    호출자는 이 예외를 EXTERNAL_SERVICE_ERROR로 변환하고 candidate를 PREPARED로 유지해야 한다."""
-    raise RuntimeError("Google Calendar LIVE 이벤트 생성은 아직 구현되지 않았습니다 (범위 밖).")
+    """CALENDAR_MODE=LIVE일 때 실제 Google Calendar에 이벤트를 1개 생성한다
+    (POST /api/bookings/{id}/confirm 전용, Agent Tool 아님). attendee/Google Meet/알림 메일은
+    추가하지 않는다. calendars.get은 호출하지 않는다.
+
+    같은 candidate로 두 번 생성하지 않는다 - 결정론적 event ID로 insert를 시도하고, 이미 존재해서
+    409가 오면 events().get()으로 그 이벤트가 정말 이 candidate의 것인지(extendedProperties.private.
+    candidateId) 확인한 뒤에만 재사용한다. 409 이외의 오류나 candidateId 불일치는 성공으로
+    간주하지 않고 그대로 예외를 던진다 - 호출자가 이 예외를 EXTERNAL_SERVICE_ERROR로 변환하고
+    candidate를 PREPARED로 유지해야 한다."""
+    from googleapiclient.errors import HttpError
+
+    service = _build_live_service()
+    cal_id = _calendar_id()
+    body = _build_event_body(candidate)
+    event_id = body["id"]
+
+    try:
+        event = service.events().insert(calendarId=cal_id, body=body).execute()
+        return {"eventId": event["id"], "htmlLink": event.get("htmlLink")}
+    except HttpError as exc:
+        if exc.status_code != 409:
+            raise
+        existing = service.events().get(calendarId=cal_id, eventId=event_id).execute()
+        existing_candidate_id = existing.get("extendedProperties", {}).get("private", {}).get("candidateId")
+        if existing_candidate_id != candidate["candidateId"]:
+            raise RuntimeError(
+                f"Google Calendar event '{event_id}'가 이미 다른 candidate에 사용 중입니다."
+            ) from exc
+        return {"eventId": existing["id"], "htmlLink": existing.get("htmlLink")}

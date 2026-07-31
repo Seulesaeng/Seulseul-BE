@@ -146,6 +146,8 @@ def test_cached_mode_event_id_and_html_link_are_null(client, monkeypatch):
 
 def test_live_success_stores_event_id_and_html_link(client, monkeypatch):
     monkeypatch.setenv("CALENDAR_MODE", "LIVE")
+    # 승인 직전 안전성 검증(재조회)이 실제로 LIVE로 성공했다고 가정한다 - 그래야 create_event까지 도달한다.
+    monkeypatch.setattr(calendar_service, "get_busy_times", lambda album_id, mode, start, end: ([], "LIVE", None))
     monkeypatch.setattr(
         calendar_service,
         "create_event",
@@ -164,7 +166,9 @@ def test_live_success_stores_event_id_and_html_link(client, monkeypatch):
 
 
 def test_live_event_creation_failure_keeps_candidate_prepared(client, monkeypatch):
-    # 실제 Google Calendar LIVE 연동은 아직 없다 - 몽키패치 없이도 항상 실패한다(정직한 동작).
+    # 실제 Google 인증을 몽키패치하지 않으면 conftest.py의 안전장치가 이를 막아 busy 재조회가
+    # LIVE로 성공하지 못한다 - 승인 직전 안전성 검증 정책상 이것도 502로 정직하게 실패해야 한다
+    # (create_event 자체의 성공/실패 케이스는 tests/test_confirm_live_event.py에서 별도로 검증한다).
     monkeypatch.setenv("CALENDAR_MODE", "LIVE")
     candidate = _create_prepared_candidate(client)
 
@@ -192,6 +196,7 @@ def test_duplicate_confirm_returns_existing_result(client):
 
 def test_duplicate_confirm_does_not_call_create_event_again(client, monkeypatch):
     monkeypatch.setenv("CALENDAR_MODE", "LIVE")
+    monkeypatch.setattr(calendar_service, "get_busy_times", lambda album_id, mode, start, end: ([], "LIVE", None))
     calls = []
 
     def fake_create_event(c, mode):
