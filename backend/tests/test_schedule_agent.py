@@ -298,3 +298,48 @@ def test_agent_has_exactly_three_tools_no_confirm_or_calendar_creation():
     assert tool_names == {"get_calendar_busy_times", "search_nail_shop_slots", "prepare_booking_candidates"}
     assert not any("confirm" in name.lower() for name in tool_names)
     assert not any("event" in name.lower() for name in tool_names)
+
+
+# ---- 21. CALENDAR_MODE=LIVE: get_calendar_busy_times Tool이 실제 LIVE busy time을 사용한다 ----
+
+
+def test_schedule_uses_live_busy_times_via_agent_tool_and_excludes_conflicting_slot(monkeypatch, client):
+    from app.services import calendar_service
+
+    class _FakeFreebusy:
+        def query(self, body):
+            self._body = body
+            return self
+
+        def execute(self):
+            # slot_2001(선호샵, 2026-08-12T19:00~20:30)과 정확히 겹치는 busy 구간을 돌려준다.
+            # slot_2003(선호샵, 2026-08-13T18:30~20:00)도 CACHED와 동일하게 겹치도록 포함해
+            # 두 선호샵 슬롯이 모두 LIVE busy time으로 제외되는 것을 확인한다.
+            return {
+                "calendars": {
+                    "primary": {
+                        "busy": [
+                            {"start": "2026-08-12T19:00:00+09:00", "end": "2026-08-12T20:30:00+09:00"},
+                            {"start": "2026-08-13T18:00:00+09:00", "end": "2026-08-13T19:30:00+09:00"},
+                        ]
+                    }
+                }
+            }
+
+    class _FakeLiveService:
+        def freebusy(self):
+            return _FakeFreebusy()
+
+    monkeypatch.setenv("CALENDAR_MODE", "LIVE")
+    monkeypatch.setattr(calendar_service, "_build_live_service", lambda: _FakeLiveService())
+    _use_fake_live_agent(monkeypatch, _fake_agent_run_success)
+
+    analysis_id = _create_analysis(client)
+    body = client.post(f"/api/analyses/{analysis_id}/schedule").json()
+
+    assert body["calendarMode"] == "LIVE"  # 실제로 LIVE freebusy.query를 써서 성공했다
+    excluded_ids = {e["slotId"]: e["exclusionReason"] for e in body["excludedSlots"]}
+    assert excluded_ids["slot_2001"] == "CALENDAR_BUSY"  # LIVE busy time으로 실제 제외됨
+    candidate_slot_ids = {c["slotId"] for c in body["candidates"]}
+    assert "slot_2001" not in candidate_slot_ids
+    assert candidate_slot_ids == {"slot_2002", "slot_2004"}  # 대체샵 2개만 남는다

@@ -19,6 +19,10 @@ class AgentRunContext:
     execution_logs: List[Dict[str, Any]] = field(default_factory=list)
     searched_scopes: List[str] = field(default_factory=list)
     prepare_call_count: int = 0
+    # get_calendar_busy_times(Tool) 또는 결정론 fallback이 실제로 사용한 Calendar 모드/사유.
+    # 응답의 calendarMode는 요청된 env 값이 아니라 이 값을 그대로 반영해야 한다.
+    calendar_mode: Optional[str] = None
+    calendar_fallback_reason: Optional[str] = None
 
 
 class EventCollector:

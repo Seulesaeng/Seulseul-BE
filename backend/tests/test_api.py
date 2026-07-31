@@ -169,7 +169,10 @@ def test_retry_returns_next_week_candidates(client):
     res = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "NEXT_WEEK"})
     assert res.status_code == 200
     body = res.json()
-    assert body["recommendedWindow"]["start"] == "2026-08-19"
+    assert body["searchScope"] == "NEXT_WEEK"
+    assert body["searchWindow"]["start"] == "2026-08-19"
+    assert body["searchWindow"]["end"] == "2026-08-20"
+    assert "retryRunId" in body
     assert 1 <= len(body["candidates"]) <= 3
     for candidate in body["candidates"]:
         assert candidate["start"].startswith("2026-08-19") or candidate["start"].startswith("2026-08-20")
@@ -188,6 +191,14 @@ def test_retry_invalid_search_scope_returns_400(client):
     assert res.json()["code"] == "INVALID_REQUEST"
 
 
+def test_retry_this_week_search_scope_returns_400(client):
+    # THIS_WEEK은 SearchScope enum 자체는 유효하지만, MVP retry는 NEXT_WEEK만 지원한다.
+    analysis_id = _create_analysis(client)
+    res = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "THIS_WEEK"})
+    assert res.status_code == 400
+    assert res.json()["code"] == "INVALID_REQUEST"
+
+
 # ---- 6. POST /api/bookings/{candidate_id}/confirm ----
 
 
@@ -201,6 +212,7 @@ def test_confirm_success_with_cached_calendar_mode(client, monkeypatch):
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "CONFIRMED"
+    assert body["reservationMode"] == "SIMULATED"
     assert body["recheck"]["conflict"] is False
     assert body["shopBooking"]["simulated"] is True
     assert body["calendarEvent"]["created"] is False
@@ -210,19 +222,18 @@ def test_confirm_success_with_cached_calendar_mode(client, monkeypatch):
     assert body["calendarMode"] == "CACHED"
 
 
-def test_confirm_live_calendar_mode_marks_created_true(client, monkeypatch):
+def test_confirm_live_calendar_mode_currently_fails_honestly(client, monkeypatch):
+    # 실제 Google Calendar LIVE 연동은 아직 없다(CLAUDE.md 9단계) - 성공한 척 가짜 이벤트를
+    # 만들지 않고, 정직하게 EXTERNAL_SERVICE_ERROR로 실패하며 candidate는 PREPARED로 남는다.
     monkeypatch.setenv("CALENDAR_MODE", "LIVE")
     analysis_id = _create_analysis(client)
     schedule = client.post(f"/api/analyses/{analysis_id}/schedule").json()
     candidate_id = schedule["candidates"][0]["candidateId"]
 
     res = client.post(f"/api/bookings/{candidate_id}/confirm")
-    assert res.status_code == 200
-    body = res.json()
-    assert body["calendarEvent"]["created"] is True
-    assert body["calendarEvent"]["simulated"] is False
-    assert body["calendarEvent"]["eventId"] is not None
-    assert body["calendarEvent"]["htmlLink"] is not None
+    assert res.status_code == 502
+    assert res.json()["code"] == "EXTERNAL_SERVICE_ERROR"
+    assert store.candidates[candidate_id]["status"] == "PREPARED"
 
 
 def test_confirm_unknown_candidate_returns_404(client):
@@ -231,7 +242,8 @@ def test_confirm_unknown_candidate_returns_404(client):
     assert res.json()["code"] == "CANDIDATE_NOT_FOUND"
 
 
-def test_confirm_already_confirmed_candidate_returns_404(client):
+def test_confirm_already_confirmed_candidate_returns_same_result(client):
+    # 멱등: 두 번째 confirm은 실패하지 않고 첫 번째와 동일한 결과를 그대로 반환한다.
     analysis_id = _create_analysis(client)
     schedule = client.post(f"/api/analyses/{analysis_id}/schedule").json()
     candidate_id = schedule["candidates"][0]["candidateId"]
@@ -240,5 +252,5 @@ def test_confirm_already_confirmed_candidate_returns_404(client):
     assert first.status_code == 200
 
     second = client.post(f"/api/bookings/{candidate_id}/confirm")
-    assert second.status_code == 404
-    assert second.json()["code"] == "CANDIDATE_NOT_FOUND"
+    assert second.status_code == 200
+    assert second.json() == first.json()

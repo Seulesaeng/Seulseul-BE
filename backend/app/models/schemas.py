@@ -189,9 +189,28 @@ class RetryRequest(BaseModel):
     searchScope: SearchScope
 
 
+class RetryResponse(BaseModel):
+    analysisId: str
+    retryRunId: str
+    searchScope: Literal["NEXT_WEEK"]
+    searchWindow: RecommendedWindow
+    candidates: List[Candidate]
+    excludedSlots: List[ExcludedSlot]
+    executionLogs: List[ExecutionLogEntry]
+    agentMode: AgentMode
+    calendarMode: CalendarMode
+    fallbackReason: Optional[str] = None
+
+
+class BusyTimeRange(BaseModel):
+    start: str
+    end: str
+
+
 class RecheckResult(BaseModel):
     conflict: bool
     checkedAt: str
+    conflictingBusyTimes: List[BusyTimeRange] = []
 
 
 class ShopBooking(BaseModel):
@@ -218,6 +237,7 @@ class ConfirmResponse(BaseModel):
     recommendationReason: str
     status: Literal["CONFIRMED"]
     confirmedAt: str
+    reservationMode: Literal["SIMULATED"]
     recheck: RecheckResult
     shopBooking: ShopBooking
     calendarEvent: CalendarEventResult

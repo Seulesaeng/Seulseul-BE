@@ -45,14 +45,19 @@ class GetCalendarBusyTimesTool(Tool):
             start_datetime == self.context.search_start and end_datetime == self.context.search_end
         )
         calendar_mode = get_modes().calendar_mode
-        busy_times = calendar_service.get_busy_times(self.album_id, calendar_mode)
+        busy_times, actual_calendar_mode, calendar_fallback_reason = calendar_service.get_busy_times(
+            self.album_id, calendar_mode, self.context.search_start, self.context.search_end
+        )
         self.context.busy_times = busy_times
+        self.context.calendar_mode = actual_calendar_mode
+        self.context.calendar_fallback_reason = calendar_fallback_reason
 
         result = {
             "busyCount": len(busy_times),
             "start": self.context.search_start,
             "end": self.context.search_end,
             "success": True,
+            "calendarMode": actual_calendar_mode,
         }
         message = "캘린더 바쁜 시간 조회 완료"
         if not matches_reverse_plan:

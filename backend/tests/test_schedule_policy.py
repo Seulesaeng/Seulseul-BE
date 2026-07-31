@@ -12,7 +12,9 @@ VALID_REASONS = {"권장 관리 구간 내", "Calendar 충돌 없음", "선호 �
 
 
 def _busy_times():
-    return calendar_service.get_busy_times(ALBUM_ID, "CACHED")
+    # CACHED는 start/end를 쓰지 않으므로(기존 동작 유지) 창은 의미상 아무 값이나 무방하다.
+    busy, _mode, _reason = calendar_service.get_busy_times(ALBUM_ID, "CACHED", WINDOW_START, WINDOW_END)
+    return busy
 
 
 def test_favorite_shop_search_yields_exactly_one_eligible_slot():
@@ -30,7 +32,9 @@ def test_alternative_shop_search_yields_two_eligible_slots():
     eligible, excluded = policy.find_eligible_and_excluded_slots(slots, _busy_times(), WINDOW_START, WINDOW_END)
 
     assert {s["slotId"] for s in eligible} == {"slot_2002", "slot_2004"}
-    assert excluded == []
+    # slot_2006/slot_2007은 다음 주(NEXT_WEEK) 슬롯이라 이번 주 창 기준으로는 제외된다.
+    excluded_ids = {e["slotId"]: e["exclusionReason"] for e in excluded}
+    assert excluded_ids == {"slot_2006": "OUTSIDE_SEARCH_SCOPE", "slot_2007": "OUTSIDE_SEARCH_SCOPE"}
 
 
 def test_prepare_candidates_from_slot_ids_dedup_sort_and_cap_at_three():
@@ -70,6 +74,44 @@ def test_full_favorite_plus_alternative_prepare_matches_one_plus_two():
         assert isinstance(candidate.price, int)
         assert candidate.recommendationReason in VALID_REASONS
         assert candidate.status == "PREPARED"
+
+
+# ---- POST /api/analyses/{id}/retry (searchScope=NEXT_WEEK) ----
+
+NEXT_WEEK_START = "2026-08-19T00:00:00+09:00"
+NEXT_WEEK_END = "2026-08-20T23:59:59+09:00"
+
+
+def test_calculate_next_week_window_adds_seven_days():
+    start, end = policy.calculate_next_week_window("2026-08-12", "2026-08-13")
+    assert start == "2026-08-19"
+    assert end == "2026-08-20"
+
+
+def test_calculate_next_week_window_is_pure_and_deterministic():
+    # 같은 입력이면 항상 같은 출력 (순수 함수).
+    assert policy.calculate_next_week_window("2026-08-12", "2026-08-13") == ("2026-08-19", "2026-08-20")
+    assert policy.calculate_next_week_window("2026-08-12", "2026-08-13") == ("2026-08-19", "2026-08-20")
+
+
+def test_next_week_favorite_shop_search_yields_exactly_one_eligible_slot():
+    slots = nail_shop_service.get_slots_by_scope(ALBUM_ID, "FAVORITE_SHOP")
+    eligible, excluded = policy.find_eligible_and_excluded_slots(
+        slots, _busy_times(), NEXT_WEEK_START, NEXT_WEEK_END
+    )
+    assert [s["slotId"] for s in eligible] == ["slot_2005"]
+    excluded_ids = {e["slotId"] for e in excluded}
+    assert excluded_ids == {"slot_2001", "slot_2003"}  # 이번 주 슬롯이라 다음 주 창 밖
+
+
+def test_next_week_alternative_shop_search_yields_two_eligible_slots():
+    slots = nail_shop_service.get_slots_by_scope(ALBUM_ID, "ALTERNATIVE_SHOPS")
+    eligible, excluded = policy.find_eligible_and_excluded_slots(
+        slots, _busy_times(), NEXT_WEEK_START, NEXT_WEEK_END
+    )
+    assert {s["slotId"] for s in eligible} == {"slot_2006", "slot_2007"}
+    excluded_ids = {e["slotId"] for e in excluded}
+    assert excluded_ids == {"slot_2002", "slot_2004"}  # 이번 주 슬롯이라 다음 주 창 밖
 
 
 def test_determine_recommendation_reason_only_uses_whitelist():

@@ -14,8 +14,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 - 배열 필드는 값이 없을 때 `null`이 아니라 빈 배열(`[]`)이다.
 - **Agent(smolagents ToolCallingAgent)는 `POST /api/analyses/{analysis_id}/schedule`와 `POST /api/analyses/{analysis_id}/retry`에서만 실행된다.**
   `POST /api/analyses`는 일반 결정론 코드만 실행하며 `candidates`/`executionLogs`를 반환하지 않는다.
-- `POST /api/bookings/{candidate_id}/confirm`만 실제 Google Calendar 이벤트를 생성할 수 있다(`CALENDAR_MODE=LIVE`일 때). 다른 어떤 엔드포인트도, Agent도 이벤트를 생성하지 않는다.
+- `POST /api/bookings/{candidate_id}/confirm`만 실제 Google Calendar 이벤트를 생성할 수 있다(`CALENDAR_MODE=LIVE`일 때, `events().insert()` 1건). 다른 어떤 엔드포인트도, Agent도 이벤트를 생성하지 않는다.
+  LIVE 읽기(중요 일정 조회, Free/Busy 조회)와 이벤트 생성 모두 실제 Google Calendar OAuth 연동으로 동작한다. LIVE 호출이 실패하면 읽기 계열(`/analyses`, `/schedule`, `/retry`)은 CACHED로 자동 fallback하지만, `/confirm`의 승인 직전 안전성 재확인은 CACHED로 조용히 대체하지 않고 `502 EXTERNAL_SERVICE_ERROR`로 안전하게 실패한다(아래 6번 문서 참고).
 - `evidenceLogs`/`executionLogs`/`changeSignal.reason`/`careStatus.message` 등 모든 로그·설명 텍스트는 결정론 코드가 생성한 문자열이다. LLM이 생성한 자유 서술 문장은 어떤 필드에도 담기지 않는다.
+- **CORS**: `backend/.env`의 `FRONTEND_ORIGIN`에 등록된 origin만 허용한다(쉼표로 복수 지정 가능). 미설정 시 로컬 개발 기본값(`http://localhost:3000`, `http://localhost:5173`, `http://127.0.0.1:3000`, `http://127.0.0.1:5173`)을 허용한다. 이 API는 쿠키/세션을 쓰지 않으므로 `credentials: "include"`는 필요 없다.
 
 ## HTTP 상태 코드
 
@@ -24,7 +26,7 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 | 200 | OK | 모든 성공 응답 |
 | 400 | Bad Request | `INVALID_REQUEST` |
 | 404 | Not Found | `ALBUM_NOT_FOUND`, `ANALYSIS_NOT_FOUND`, `CANDIDATE_NOT_FOUND` |
-| 409 | Conflict | `CALENDAR_CONFLICT`, `SCHEDULE_NOT_APPLICABLE` |
+| 409 | Conflict | `CALENDAR_CONFLICT`, `SCHEDULE_NOT_APPLICABLE`, `INVALID_CANDIDATE_STATUS` |
 | 502 | Bad Gateway | `EXTERNAL_SERVICE_ERROR` |
 
 ## 공통 오류 응답
@@ -45,9 +47,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 | `ALBUM_NOT_FOUND` | 404 | `POST /api/albums/connect`, `POST /api/analyses` | `album.json`을 찾을 수 없거나 `albumId`가 일치하지 않음 |
 | `ANALYSIS_NOT_FOUND` | 404 | `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry` | `analysis_id`가 존재하지 않음 |
 | `SCHEDULE_NOT_APPLICABLE` | 409 | `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry` | 해당 analysis의 `canSchedule`이 `false`라 탐색할 필요가 없음 |
-| `CANDIDATE_NOT_FOUND` | 404 | `POST /api/bookings/{id}/confirm` | `candidate_id`가 존재하지 않거나 이미 `CONFIRMED`라 더 이상 승인 대상이 아님 |
-| `CALENDAR_CONFLICT` | 409 | `POST /api/bookings/{id}/confirm` | 승인 직전 재조회 결과 해당 시간대에 Calendar 충돌 발생 |
-| `EXTERNAL_SERVICE_ERROR` | 502 | `POST /api/analyses`, `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry`, `POST /api/bookings/{id}/confirm` | Vision/Calendar/LLM 등 외부 호출 실패 |
+| `CANDIDATE_NOT_FOUND` | 404 | `POST /api/bookings/{id}/confirm` | `candidate_id`가 존재하지 않음. 이미 `CONFIRMED`인 candidate는 404가 아니라 200으로 기존 확정 결과를 그대로 반환한다(멱등) |
+| `INVALID_CANDIDATE_STATUS` | 409 | `POST /api/bookings/{id}/confirm` | candidate 상태가 `PREPARED`도 `CONFIRMED`도 아닌 방어적 이상 상태 |
+| `CALENDAR_CONFLICT` | 409 | `POST /api/bookings/{id}/confirm` | 승인 직전 재조회 결과 해당 시간대에 Calendar 충돌 발생. candidate는 `PREPARED`로 유지된다 |
+| `EXTERNAL_SERVICE_ERROR` | 502 | `POST /api/analyses`, `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry`, `POST /api/bookings/{id}/confirm` | Vision/Calendar/LLM 등 외부 호출 실패. confirm에서는 `CALENDAR_MODE=LIVE` 이벤트 생성 실패 시 발생하며 candidate는 `PREPARED`로 유지된다(현재는 OAuth 미연동으로 항상 이 응답) |
 
 ---
 
@@ -228,7 +231,48 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 
 /**
  * @typedef {Object} RetryRequest
- * @property {"THIS_WEEK"|"NEXT_WEEK"} searchScope
+ * @property {"THIS_WEEK"|"NEXT_WEEK"} searchScope   - MVP에서는 "NEXT_WEEK"만 지원한다. 그 외 값(THIS_WEEK 포함)은 400 INVALID_REQUEST.
+ */
+
+/**
+ * @typedef {Object} RetryResponse
+ * @property {string} analysisId
+ * @property {string} retryRunId
+ * @property {"NEXT_WEEK"} searchScope
+ * @property {RecommendedWindow} searchWindow   - 기존 reversePlan의 recommendedStart/recommendedEnd에 각각 7일을 더한 구간
+ * @property {Candidate[]} candidates   - 최대 3개
+ * @property {ExcludedSlot[]} excludedSlots
+ * @property {ExecutionLogEntry[]} executionLogs
+ * @property {"LIVE"|"FALLBACK"|"CACHED"} agentMode
+ * @property {"LIVE"|"CACHED"} calendarMode
+ * @property {string|null} fallbackReason
+ */
+
+/**
+ * @typedef {Object} BusyTimeRange
+ * @property {string} start
+ * @property {string} end
+ */
+
+/**
+ * @typedef {Object} RecheckResult
+ * @property {boolean} conflict
+ * @property {string} checkedAt
+ * @property {BusyTimeRange[]} conflictingBusyTimes   - conflict=false면 항상 빈 배열
+ */
+
+/**
+ * @typedef {Object} ShopBooking
+ * @property {boolean} simulated          - 항상 true. 실제 네일샵 예약이 아니다
+ * @property {string} confirmationCode    - 최초 성공 시 한 번만 생성되고, 이후 재확인/재호출에도 재사용된다
+ */
+
+/**
+ * @typedef {Object} CalendarEventResult
+ * @property {boolean} created
+ * @property {boolean} simulated
+ * @property {string|null} eventId
+ * @property {string|null} htmlLink
  */
 
 /**
@@ -244,9 +288,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
  * @property {string} recommendationReason
  * @property {"CONFIRMED"} status
  * @property {string} confirmedAt
- * @property {{conflict: boolean, checkedAt: string}} recheck
- * @property {{simulated: boolean, confirmationCode: string}} shopBooking
- * @property {{created: boolean, simulated: boolean, eventId: string|null, htmlLink: string|null}} calendarEvent
+ * @property {"SIMULATED"} reservationMode   - 항상 "SIMULATED". 실제 미용실 예약이 아니다
+ * @property {RecheckResult} recheck
+ * @property {ShopBooking} shopBooking
+ * @property {CalendarEventResult} calendarEvent
  * @property {"LIVE"|"CACHED"} calendarMode
  */
 
@@ -511,8 +556,22 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ## 5. POST /api/analyses/{analysis_id}/retry
 
-기존 분석(`selectedPhotos`, `changeSignal`, `timing`, `careStatus`, `upcomingEvent`, `reversePlan`)을 재사용하고,
-`/schedule`과 동일한 Agent 플로우를 지정한 `searchScope`로 다시 실행해 `candidates`만 새로 탐색한다.
+**MVP에서는 `searchScope`로 `"NEXT_WEEK"`만 지원한다.** `"THIS_WEEK"`를 포함한 다른 값은 400 `INVALID_REQUEST`다.
+
+기존 analysis의 결과(`selectedPhotos`, `changeSignal`, `timing`, `careStatus`, `upcomingEvent`, `reversePlan`)는
+**재계산하지 않고 그대로 재사용한다** — Vision을 다시 호출하지 않고, 사진을 다시 선택하지 않고, 시술 주기·`careStatus`를
+다시 계산하지 않고, `upcomingEvent`/`reversePlan`도 다시 계산하지 않는다. 새로 하는 일은 오직 `searchWindow`(다음 주 구간)에서
+`/schedule`과 동일한 Agent runner·Tool 3개(`get_calendar_busy_times` → `search_nail_shop_slots(FAVORITE_SHOP)` →
+부족하면 `search_nail_shop_slots(ALTERNATIVE_SHOPS)` → `prepare_booking_candidates`)를 새 `AgentRunContext`로 다시
+실행해 `candidates`를 새로 탐색하는 것뿐이다.
+
+`searchWindow`는 기존 `reversePlan.recommendedStart`/`recommendedEnd`에 각각 7일을 더해 결정론적으로 계산한다(순수 함수).
+예: `reversePlan`이 `2026-08-12`~`2026-08-13`이면 `searchWindow`는 `2026-08-19`~`2026-08-20`이다.
+
+이번 호출로 준비된 `candidates`는 이전 `/schedule`(또는 이전 `/retry`) 호출의 후보를 삭제·덮어쓰지 않는다 —
+`candidateId`는 `{retryRunId}_{slotId}` 형태라 다른 실행의 `candidateId`와 겹치지 않는다.
+
+`canSchedule`이 `false`인 analysis에는 호출할 수 없다(`SCHEDULE_NOT_APPLICABLE`), `/schedule`과 동일하다.
 
 ### Path Parameters
 
@@ -528,12 +587,50 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ### Response 200
 
-`ScheduleResponse`와 동일한 형태. `scheduleRunId`는 새로 발급되고 `recommendedWindow`가 `searchScope`만큼 이동하며 `candidates`/`excludedSlots`/`executionLogs`가 갱신된다.
+`RetryResponse` 형태(`ScheduleResponse`와 필드명이 다르다 — `scheduleRunId`/`recommendedWindow` 대신 `retryRunId`/`searchWindow`를 쓴다).
+
+```json
+{
+  "analysisId": "analysis_20260810094100_3395",
+  "retryRunId": "retry_20260810094100_1872",
+  "searchScope": "NEXT_WEEK",
+  "searchWindow": { "start": "2026-08-19", "end": "2026-08-20", "basis": "UPCOMING_EVENT" },
+  "candidates": [
+    { "candidateId": "retry_20260810094100_1872_slot_2006", "slotId": "slot_2006", "shop": "무드네일 합정", "artist": "박서현", "service": "GEL_NAIL", "price": 42000, "start": "2026-08-19T14:00:00+09:00", "end": "2026-08-19T15:30:00+09:00", "recommendationReason": "빠른 예약 가능 시간", "status": "PREPARED" },
+    { "candidateId": "retry_20260810094100_1872_slot_2005", "slotId": "slot_2005", "shop": "프리즘네일 홍대", "artist": "이나연", "service": "GEL_NAIL", "price": 45000, "start": "2026-08-19T19:00:00+09:00", "end": "2026-08-19T20:30:00+09:00", "recommendationReason": "선호 네일샵", "status": "PREPARED" },
+    { "candidateId": "retry_20260810094100_1872_slot_2007", "slotId": "slot_2007", "shop": "무드네일 합정", "artist": "이나연", "service": "GEL_NAIL", "price": 42000, "start": "2026-08-20T20:00:00+09:00", "end": "2026-08-20T21:30:00+09:00", "recommendationReason": "권장 관리 구간 내", "status": "PREPARED" }
+  ],
+  "excludedSlots": [
+    { "slotId": "slot_2001", "shop": "프리즘네일 홍대", "start": "2026-08-12T19:00:00+09:00", "end": "2026-08-12T20:30:00+09:00", "exclusionReason": "OUTSIDE_SEARCH_SCOPE" }
+  ],
+  "executionLogs": [
+    { "step": 1, "type": "SYSTEM", "tool": null, "searchScope": null, "result": { "searchStart": "2026-08-19T00:00:00+09:00", "searchEnd": "2026-08-20T23:59:59+09:00" }, "message": "다음 주(NEXT_WEEK) 예약 후보 재탐색을 시작합니다.", "exclusionReason": null },
+    { "step": 2, "type": "TOOL", "tool": "get_calendar_busy_times", "searchScope": null, "result": { "busyCount": 1 }, "message": "캘린더 바쁜 시간 조회 완료", "exclusionReason": null },
+    { "step": 3, "type": "TOOL", "tool": "search_nail_shop_slots", "searchScope": null, "result": { "searchScope": "FAVORITE_SHOP", "eligibleSlotIds": ["slot_2005"] }, "message": "FAVORITE_SHOP 슬롯 조회 완료", "exclusionReason": null },
+    { "step": 4, "type": "AGENT", "tool": null, "searchScope": null, "result": { "totalEligibleCount": 1 }, "message": "누적 후보가 1개로 목표(3개) 미만이라 추가 검색이 필요합니다.", "exclusionReason": null },
+    { "step": 5, "type": "TOOL", "tool": "search_nail_shop_slots", "searchScope": null, "result": { "searchScope": "ALTERNATIVE_SHOPS", "eligibleSlotIds": ["slot_2006", "slot_2007"] }, "message": "ALTERNATIVE_SHOPS 슬롯 조회 완료", "exclusionReason": null },
+    { "step": 6, "type": "TOOL", "tool": "prepare_booking_candidates", "searchScope": null, "result": { "preparedCandidateCount": 3 }, "message": "예약 후보 3건 준비 완료", "exclusionReason": null }
+  ],
+  "agentMode": "LIVE",
+  "calendarMode": "CACHED",
+  "fallbackReason": null
+}
+```
+
+`agentMode`/`fallbackReason`은 `/schedule`과 동일한 규칙을 따른다 — Agent가 실패하면 결정론 fallback으로 대체되고
+(`agentMode: "FALLBACK"`), Agent가 후보 준비 이후 마무리 단계에서만 실패하면 이미 준비된 후보를 그대로 쓰면서
+`fallbackReason: "AGENT_FINALIZATION_FAILED_AFTER_PREPARE"`를 반환한다.
+
+`calendarMode`는 이번 조회에 **실제로 사용한** 모드를 정직하게 반환한다(`AGENT_MODE`와는 독립적). `CALENDAR_MODE=LIVE`면
+Agent Tool `get_calendar_busy_times`가 실제 Google Calendar Free/Busy(`freebusy.query`)를 조회해 겹치는 슬롯을 제외한다.
+LIVE 조회가 실패하면(인증 만료, 네트워크 오류 등) CACHED fixture로 자동 fallback하며, 이때 `calendarMode: "CACHED"`와
+`fallbackReason: "CALENDAR_LIVE_BUSY_FAILED: <예외타입>"`을 반환한다. `fallbackReason`에 Agent 관련 사유와 동시에
+해당하면 `"; "`로 이어붙여 반환한다.
 
 ### Response 400
 
 ```json
-{ "code": "INVALID_REQUEST", "message": "searchScope는 'THIS_WEEK' 또는 'NEXT_WEEK'이어야 합니다.", "detail": null }
+{ "code": "INVALID_REQUEST", "message": "MVP에서는 searchScope로 'NEXT_WEEK'만 지원합니다.", "detail": null }
 ```
 
 ### Response 404 / 409 / 502
@@ -544,10 +641,16 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ## 6. POST /api/bookings/{candidate_id}/confirm
 
-1. **상태 확인**: `candidate_id`가 존재하고 `status === "PREPARED"`인지 확인한다.
-2. **재확인**: 결정론 코드로 Google Calendar를 다시 조회해 충돌 여부를 확인한다(Agent 아님).
-3. **예약 시뮬레이션**: 충돌이 없으면 네일샵 예약 성공을 시뮬레이션한다(항상 시뮬레이션).
-4. **캘린더 생성**: `CALENDAR_MODE=LIVE`일 때만 실제 Google Calendar 이벤트를 생성한다.
+1. **조회**: `candidate_id`로 인메모리 candidate를 조회한다. 없으면 404 `CANDIDATE_NOT_FOUND`.
+2. **멱등 처리**: `status`가 이미 `CONFIRMED`면 재확인·예약 시뮬레이션·Calendar 이벤트 생성을 다시 하지 않고, 최초 확정 시 저장해둔 응답을 그대로 반환한다(`confirmationCode`/`eventId`도 새로 만들지 않는다).
+3. `status`가 `PREPARED`도 `CONFIRMED`도 아니면(방어적 이상 상태) 409 `INVALID_CANDIDATE_STATUS`.
+4. **재확인**: `CALENDAR_MODE`에 따라 Google Calendar 바쁜 시간을 다시 조회해, 슬롯 검색 때 쓰는 것과 동일한 순수 충돌 판정 함수로 겹침을 확인한다(Agent 아님). **`CALENDAR_MODE=LIVE`인데 이 재조회가 실패해 CACHED로 대체됐다면, 그 CACHED 데이터로 조용히 확정하지 않고 502 `EXTERNAL_SERVICE_ERROR`로 안전하게 실패한다** — `/analyses`·`/schedule`·`/retry`의 "LIVE 실패 시 CACHED로 자동 fallback" 정책과 달리, 예약 확정 직전의 안전성 검증이라 더 엄격하다.
+5. 새 충돌이 있으면 409 `CALENDAR_CONFLICT` — candidate는 `PREPARED`로 유지되고 Calendar 이벤트 생성 함수는 호출되지 않는다.
+6. 충돌이 없으면 네일샵 예약 성공을 시뮬레이션한다(`shopBooking`, 항상 시뮬레이션. `confirmationCode`는 이 시점에 한 번만 생성).
+7. `CALENDAR_MODE`에 따라 Calendar 이벤트를 처리한다:
+   - `CACHED`: 실제 이벤트를 생성하지 않는다.
+   - `LIVE`: `events().insert()`로 실제 Google Calendar 이벤트를 1개 생성한다(제목 "슬슬 · 네일 예약", 참석자/Google Meet/알림 메일 없음). **생성(또는 같은 candidate로 이미 만들어진 이벤트 재확인)에 성공했을 때만** candidate를 `CONFIRMED`로 바꾼다. 실패하면 502 `EXTERNAL_SERVICE_ERROR`이며 candidate는 `PREPARED`로 유지된다. 같은 candidate를 두 번 confirm해도 이벤트는 1개만 생성된다(candidate_id로부터 결정론적으로 만든 Google event ID를 재사용).
+8. 모든 필수 처리가 성공한 뒤에만 candidate를 `CONFIRMED`로 바꾸고 `confirmedAt`과 확정 결과를 저장한다.
 
 ### Path Parameters
 
@@ -561,34 +664,53 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 {}
 ```
 
-### Response 200 — `CALENDAR_MODE=CACHED`
+### Response 200 — `CALENDAR_MODE=CACHED` (최초 확정)
 
 ```json
 {
-  "candidateId": "cand_01",
-  "slotId": "slot_1203",
-  "shop": "슬슬네일 강남점",
+  "candidateId": "schedule_20260810094100_8077_slot_2001",
+  "slotId": "slot_2001",
+  "shop": "프리즘네일 홍대",
   "artist": "김아라",
-  "service": "젤네일",
+  "service": "GEL_NAIL",
   "price": 45000,
-  "start": "2026-08-12T14:00:00+09:00",
-  "end": "2026-08-12T15:00:00+09:00",
+  "start": "2026-08-12T19:00:00+09:00",
+  "end": "2026-08-12T20:30:00+09:00",
   "recommendationReason": "선호 네일샵",
   "status": "CONFIRMED",
-  "confirmedAt": "2026-08-01T09:05:00+09:00",
-  "recheck": { "conflict": false, "checkedAt": "2026-08-01T09:04:59+09:00" },
-  "shopBooking": { "simulated": true, "confirmationCode": "SIM-20260801-0001" },
-  "calendarEvent": { "created": false, "simulated": true, "eventId": null, "htmlLink": null },
+  "confirmedAt": "2026-08-10T09:41:00+09:00",
+  "reservationMode": "SIMULATED",
+  "recheck": {
+    "conflict": false,
+    "checkedAt": "2026-08-10T09:41:00+09:00",
+    "conflictingBusyTimes": []
+  },
+  "shopBooking": {
+    "simulated": true,
+    "confirmationCode": "SIM-20260810094100-t_2001"
+  },
+  "calendarEvent": {
+    "created": false,
+    "simulated": true,
+    "eventId": null,
+    "htmlLink": null
+  },
   "calendarMode": "CACHED"
 }
 ```
 
-### Response 200 — `CALENDAR_MODE=LIVE` (성공)
+`reservationMode`는 항상 `"SIMULATED"`다(미용실 예약은 항상 시뮬레이션). `CALENDAR_MODE=CACHED`에서는 `calendarEvent.created`가 항상 `false`, `eventId`/`htmlLink`가 항상 `null`이다 — 프론트가 "Google Calendar에 실제 추가됨"으로 오해할 값을 반환하지 않는다.
 
-`calendarEvent`만 다음과 같이 달라진다.
+### Response 200 — 동일 candidate 중복 confirm (멱등)
+
+같은 `candidate_id`로 다시 호출해도 최초 확정 시 응답과 완전히 동일한 JSON이 그대로 반환된다(`confirmedAt`, `shopBooking.confirmationCode`, `calendarEvent` 전부 동일). 이벤트를 다시 생성하거나 `confirmationCode`를 다시 만들지 않는다.
+
+### Response 200 — `CALENDAR_MODE=LIVE` (성공 시)
+
+`calendarEvent`만 다음과 같이 달라지고 나머지 필드 구조는 CACHED와 동일하다. `eventId`/`htmlLink`는 실제 Google Calendar 값이다.
 
 ```json
-{ "created": true, "simulated": false, "eventId": "g_evt_abc123", "htmlLink": "https://calendar.google.com/event?eid=..." }
+{ "created": true, "simulated": false, "eventId": "sls8c21e830b145c94a8a9f839f985c207ec510b7f6", "htmlLink": "https://www.google.com/calendar/event?eid=..." }
 ```
 
 ### Response 404
@@ -597,17 +719,155 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 { "code": "CANDIDATE_NOT_FOUND", "message": "candidate_id 'cand_xx'를 찾을 수 없거나 더 이상 승인할 수 없습니다.", "detail": null }
 ```
 
-### Response 409
+### Response 409 — `INVALID_CANDIDATE_STATUS`
 
 ```json
-{ "code": "CALENDAR_CONFLICT", "message": "재확인 결과 해당 시간대에 캘린더 일정이 생겨 예약할 수 없습니다.", "detail": { "conflict": true, "checkedAt": "2026-08-01T09:04:59+09:00" } }
+{ "code": "INVALID_CANDIDATE_STATUS", "message": "candidate_id 'cand_xx'의 상태가 올바르지 않습니다: SOMETHING_ELSE", "detail": null }
 ```
 
-### Response 502
+### Response 409 — `CALENDAR_CONFLICT`
 
 ```json
-{ "code": "EXTERNAL_SERVICE_ERROR", "message": "Google Calendar 이벤트 생성에 실패했습니다.", "detail": null }
+{
+  "code": "CALENDAR_CONFLICT",
+  "message": "재확인 결과 해당 시간대에 캘린더 일정이 생겨 예약할 수 없습니다.",
+  "detail": {
+    "conflict": true,
+    "checkedAt": "2026-08-10T09:41:00+09:00",
+    "conflictingBusyTimes": [
+      { "start": "2026-08-12T19:15:00+09:00", "end": "2026-08-12T19:45:00+09:00" }
+    ]
+  }
+}
 ```
+
+candidate는 `PREPARED` 상태로 유지되며, Calendar 이벤트 생성 함수는 호출되지 않는다.
+
+### Response 502 — `CALENDAR_MODE=LIVE` 이벤트 생성 실패 또는 재확인 실패
+
+```json
+{ "code": "EXTERNAL_SERVICE_ERROR", "message": "Google Calendar 이벤트 생성에 실패했습니다: ...", "detail": null }
+```
+
+이벤트 생성(`events().insert()`) 실패, 또는 승인 직전 Free/Busy 재확인이 LIVE로 성공하지 못한 경우 모두 이 응답이다.
+candidate는 `PREPARED` 상태로 유지된다(`CONFIRMED`로 바뀌지 않으며 `eventId`/`htmlLink`도 저장되지 않는다).
+
+---
+
+## 프론트엔드 연동 흐름 (ID 전달 관계)
+
+각 호출의 응답에서 ID를 꺼내 다음 호출에 그대로 전달한다. 고정 ID는 없다 — 매 실행마다 새로 발급된다.
+
+```
+POST /api/albums/connect          -> response.albumId            (예: "album-001")
+       │
+       ▼  { albumId }
+POST /api/analyses                -> response.analysisId         (예: "analysis_20260810094100_7843")
+       │                             response.canSchedule로 다음 단계 노출 여부 결정
+       ▼  (path: analysis_id)
+POST /api/analyses/{id}/schedule  -> response.candidates[].candidateId
+       │                             (여러 개, 최대 3개 — 사용자가 카드 중 하나 선택)
+       │
+       │  (마음에 드는 후보가 없으면)
+       ├─▶ POST /api/analyses/{id}/retry { searchScope: "NEXT_WEEK" }
+       │        -> response.candidates[].candidateId (새 후보, 기존 후보와 병행 표시 가능)
+       ▼  (path: candidate_id, 위 둘 중 선택한 candidateId)
+POST /api/bookings/{candidateId}/confirm -> response.status === "CONFIRMED"
+```
+
+- `GET /api/health`는 체인에 속하지 않는다 — 서버 기동 확인용으로 아무 때나 호출 가능하다.
+- `POST /api/analyses`의 `canSchedule`이 `false`면 `/schedule`을 호출할 수 없다(409). 이 경우 프론트는
+  "지금은 예약할 시점이 아니다"라는 화면만 보여주고 흐름을 종료한다.
+- `/schedule`과 `/retry`의 `candidates`는 서로 다른 실행(run)의 결과이며 `candidateId`가 겹치지 않는다.
+  `/retry`를 호출해도 `/schedule`의 기존 후보 카드는 사라지지 않는다 — 프론트가 둘을 합쳐서 보여줄지,
+  최신 것만 보여줄지는 UI 설계에 달려 있다.
+- `confirm`은 `candidateId`만 있으면 되고 `analysisId`는 필요 없다(경로에 없음).
+
+## 프론트엔드 요청 예시
+
+`fetch` 예시. 모든 ID는 직전 응답에서 동적으로 읽는다(아래 `analysisId`/`candidateId` 같은 고정 문자열은
+없다 — 반드시 실행 시점의 실제 응답 값을 써야 한다). `credentials`는 이 API가 쿠키/세션을 쓰지 않으므로
+생략해도 된다.
+
+```javascript
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+// 1. 서버 상태 확인 (선택)
+const health = await fetch(`${BASE_URL}/api/health`).then((r) => r.json());
+
+// 2. 데모 앨범 연결
+const album = await fetch(`${BASE_URL}/api/albums/connect`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ source: "DEMO" }),
+}).then((r) => r.json());
+const albumId = album.albumId;
+
+// 3. 분석 실행 (Agent 미실행)
+const analysis = await fetch(`${BASE_URL}/api/analyses`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ albumId }),
+}).then((r) => r.json());
+const analysisId = analysis.analysisId;
+
+if (!analysis.canSchedule) {
+  // careStatus/upcomingEvent만 보여주고 흐름 종료
+} else {
+  // 4. 예약 후보 탐색 (Agent 최초 실행)
+  const schedule = await fetch(`${BASE_URL}/api/analyses/${analysisId}/schedule`, {
+    method: "POST",
+  }).then((r) => r.json());
+
+  // 5. 후보 카드 중 하나 선택 (사용자 UI 선택 — 여기서는 첫 번째 예시)
+  const chosen = schedule.candidates[0];
+  const candidateId = chosen.candidateId;
+
+  // 6. 승인 (여기서만 실제 Google Calendar 이벤트가 생성될 수 있다 - CALENDAR_MODE=LIVE일 때)
+  const confirmRes = await fetch(`${BASE_URL}/api/bookings/${candidateId}/confirm`, {
+    method: "POST",
+  });
+  if (!confirmRes.ok) {
+    const err = await confirmRes.json(); // { code, message, detail }
+    // err.code로 분기: CALENDAR_CONFLICT(409) / CANDIDATE_NOT_FOUND(404) / EXTERNAL_SERVICE_ERROR(502) 등
+  } else {
+    const confirmed = await confirmRes.json();
+    // confirmed.calendarEvent.created / simulated / eventId / htmlLink
+  }
+
+  // 7. (선택) 후보가 마음에 안 들면 다음 주 후보 재탐색
+  const retry = await fetch(`${BASE_URL}/api/analyses/${analysisId}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ searchScope: "NEXT_WEEK" }),
+  }).then((r) => r.json());
+}
+```
+
+동일한 흐름의 `curl` 예시(터미널 데모/디버깅용). `$(...)`로 직전 응답에서 ID를 뽑아 다음 호출에 넘긴다.
+
+```bash
+BASE_URL=http://localhost:8000
+
+curl -s "$BASE_URL/api/health"
+
+ALBUM_ID=$(curl -s -X POST "$BASE_URL/api/albums/connect" \
+  -H "Content-Type: application/json" -d '{"source":"DEMO"}' | jq -r '.albumId')
+
+ANALYSIS_ID=$(curl -s -X POST "$BASE_URL/api/analyses" \
+  -H "Content-Type: application/json" -d "{\"albumId\":\"$ALBUM_ID\"}" | jq -r '.analysisId')
+
+CANDIDATE_ID=$(curl -s -X POST "$BASE_URL/api/analyses/$ANALYSIS_ID/schedule" | jq -r '.candidates[0].candidateId')
+
+curl -s -X POST "$BASE_URL/api/bookings/$CANDIDATE_ID/confirm"
+
+# 후보가 마음에 안 들면:
+curl -s -X POST "$BASE_URL/api/analyses/$ANALYSIS_ID/retry" \
+  -H "Content-Type: application/json" -d '{"searchScope":"NEXT_WEEK"}'
+```
+
+`backend/scripts/demo_e2e.py`가 이 흐름 전체를 실행하는 참조 클라이언트 스크립트다(터미널에서 사람이 읽기
+좋은 요약만 출력한다). 실행 방법은 `docs/demo-scenario.md`와 스크립트 자체의 `--help`를 참고한다.
 
 ---
 
@@ -619,5 +879,5 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 | POST | `/api/albums/connect` | ✕ | 데모 앨범 연결 + 정렬된 사진 + scanSummary |
 | POST | `/api/analyses` | ✕ | 사진선택·Vision·주기·관리시점판정·중요일정조회·역방향구간계산 |
 | POST | `/api/analyses/{id}/schedule` | ✅ | Agent가 3-Tool로 예약 후보(최대 3개) 탐색 |
-| POST | `/api/analyses/{id}/retry` | ✅ | 동일 Agent 플로우를 다른 searchScope로 재실행 |
+| POST | `/api/analyses/{id}/retry` | ✅ | 동일 Agent 플로우를 NEXT_WEEK 구간(+7일)에서 재실행(MVP: searchScope는 NEXT_WEEK만 지원) |
 | POST | `/api/bookings/{id}/confirm` | ✕ | 재확인 + 예약 시뮬레이션 + (LIVE만) 캘린더 생성 |

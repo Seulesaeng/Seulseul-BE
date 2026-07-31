@@ -2,8 +2,10 @@
 .env
 .env.*
 !.env.example
+!.env.demo.example
 credentials.json
 token.json
+client_secret_*.json
 *.pem
 *.key
 

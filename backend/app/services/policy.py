@@ -14,6 +14,7 @@ REVERSE_PLAN_LEAD_DAYS_END = 2
 REVERSE_PLAN_REASON_CODE = "EVENT_MINUS_2_TO_3_DAYS"
 
 MAX_CANDIDATES = 3
+NEXT_WEEK_OFFSET_DAYS = 7
 
 RECOMMENDATION_REASON_FAVORITE_SHOP = "선호 네일샵"
 RECOMMENDATION_REASON_NO_CONFLICT = "Calendar 충돌 없음"
@@ -177,6 +178,18 @@ def is_slot_busy(slot_start: str, slot_end: str, busy_times: List[dict]) -> bool
     return False
 
 
+def find_conflicting_busy_times(slot_start: str, slot_end: str, busy_times: List[dict]) -> List[dict]:
+    """is_slot_busy와 동일한 충돌 판정(_slots_overlap)을 재사용해, 실제로 겹치는
+    busy time만 추린다 (POST /api/bookings/{id}/confirm의 재확인 상세용)."""
+    start = datetime.fromisoformat(slot_start)
+    end = datetime.fromisoformat(slot_end)
+    return [
+        busy
+        for busy in busy_times
+        if _slots_overlap(start, end, datetime.fromisoformat(busy["start"]), datetime.fromisoformat(busy["end"]))
+    ]
+
+
 def is_within_window(slot_start: str, slot_end: str, window_start: str, window_end: str) -> bool:
     start = datetime.fromisoformat(slot_start)
     end = datetime.fromisoformat(slot_end)
@@ -266,3 +279,14 @@ def prepare_candidates_from_slot_ids(
             )
         )
     return candidates, skipped_ids
+
+
+# ---- POST /api/analyses/{id}/retry (searchScope=NEXT_WEEK) 전용 ----
+
+
+def calculate_next_week_window(recommended_start: str, recommended_end: str) -> Tuple[str, str]:
+    """retry(NEXT_WEEK) 검색창: 기존 reversePlan의 recommendedStart/recommendedEnd에 각각
+    7일을 더한다 (순수 함수). 예: 2026-08-12~2026-08-13 -> 2026-08-19~2026-08-20."""
+    start = date.fromisoformat(recommended_start) + timedelta(days=NEXT_WEEK_OFFSET_DAYS)
+    end = date.fromisoformat(recommended_end) + timedelta(days=NEXT_WEEK_OFFSET_DAYS)
+    return start.isoformat(), end.isoformat()

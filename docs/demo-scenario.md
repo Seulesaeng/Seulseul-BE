@@ -14,6 +14,23 @@
   → 오늘(2026-08-01) 기준 `daysSinceLastService = 21`로 관리 시점(`careStatus.status = "NOW"`) 조건을 자연스럽게 충족.
 - **필수 시나리오**: `backend/data/calendar_events.json`에 2026-08-15 "친구 결혼식" 이벤트를 고정 등록해
   `upcomingEvent`/`reversePlan`(역방향 스케줄) 경로가 항상 데모에서 동작하도록 한다. 이 기능은 포기 대상이 아니다.
+- `backend/data/nail_shop_slots.json`은 `album-001`에 슬롯 7개를 고정 등록한다(`favoriteShop`이 진짜 필터 기준이고,
+  `searchScope`/`reasonHint`는 사람이 읽기 위한 설명용 메타데이터일 뿐 실제 조회 로직(`get_slots_by_scope`)은
+  `favoriteShop` 불리언만 보고 FAVORITE_SHOP(3개)/ALTERNATIVE_SHOPS(4개)로 나눈다 — 실제로 몇 주차 슬롯인지는
+  각 슬롯의 `start`/`end` 시각과 요청된 검색창의 겹침으로만 결정된다):
+
+  | slotId | shop | favoriteShop | start | 비고 |
+  |---|---|---|---|---|
+  | slot_2001 | 프리즘네일 홍대 | true | 2026-08-12T19:00 | 이번 주(8/12~13) 창에서 정상 |
+  | slot_2002 | 무드네일 합정 | false | 2026-08-12T14:00 | 이번 주 창에서 정상 |
+  | slot_2003 | 프리즘네일 홍대 | true | 2026-08-13T18:30 | 이번 주 창이지만 `calendar_busy.json`의 "팀 회의"(18:00~19:30)와 겹쳐 `CALENDAR_BUSY`로 제외 |
+  | slot_2004 | 무드네일 합정 | false | 2026-08-13T20:00 | 이번 주 창에서 정상 |
+  | slot_2005 | 프리즘네일 홍대 | true | 2026-08-19T19:00 | **NEXT_WEEK 전용.** `/retry`의 8/19~20 창에서만 정상, 이번 주 창에서는 `OUTSIDE_SEARCH_SCOPE`로 제외 |
+  | slot_2006 | 무드네일 합정 | false | 2026-08-19T14:00 | NEXT_WEEK 전용(대체샵) |
+  | slot_2007 | 무드네일 합정 | false | 2026-08-20T20:00 | NEXT_WEEK 전용(대체샵) |
+
+  4단계(`/retry` NEXT_WEEK)를 실행하면 이번 주와 동일하게 "선호샵(slot_2005) 1개만으로는 목표(3개) 미달 →
+  대체샵(slot_2006, slot_2007) 추가 조회" 패턴이 그대로 재현된다.
 
 ## 시나리오 흐름
 
@@ -43,9 +60,9 @@
 
 ### 4단계 — 다른 시간 보기 (선택)
 - 사용자 액션: 후보가 마음에 들지 않으면 "다음 주 시간 보기" 클릭
-- API: `POST /api/analyses/{analysisId}/retry` `{ "searchScope": "NEXT_WEEK" }`
-- 서버 동작: 동일 Agent 플로우를 `NEXT_WEEK` 창으로 재실행
-- 화면: 새 `candidates`로 카드 목록 갱신
+- API: `POST /api/analyses/{analysisId}/retry` `{ "searchScope": "NEXT_WEEK" }` — MVP는 `searchScope`로 `NEXT_WEEK`만 지원한다
+- 서버 동작: 기존 `reversePlan`(8/12~13)에 +7일한 `searchWindow`(8/19~20)에서 동일 Agent 플로우(`get_calendar_busy_times` → `search_nail_shop_slots(FAVORITE_SHOP)` → `search_nail_shop_slots(ALTERNATIVE_SHOPS)` → `prepare_booking_candidates`)를 새 `AgentRunContext`로 재실행한다. 사진선택·Vision·시술주기·`careStatus`·`upcomingEvent`·`reversePlan`은 다시 계산하지 않고 기존 analysis 결과를 그대로 재사용한다
+- 화면: `slot_2005`(선호샵) + `slot_2006`/`slot_2007`(대체샵) 기반 새 `candidates`(최대 3개)로 카드 목록 갱신. `retryRunId`가 새로 발급되며 3단계의 기존 `candidates`는 삭제되지 않고 그대로 남아있다
 
 ### 5단계 — 예약 승인
 - 사용자 액션: 후보 카드에서 "예약 확정" 클릭 → 승인 확인 모달(승인 전 실제 실행 없음을 재고지) → 확인
