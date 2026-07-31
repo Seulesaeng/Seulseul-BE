@@ -33,6 +33,8 @@ class AnalysisResult:
     evidenceLogs: List[EvidenceLogEntry]
     canSchedule: bool
     fallbackReason: Optional[str]
+    calendarMode: str
+    calendarFallbackReason: Optional[str]
 
 
 def load_service_dates(album_id: str) -> List[str]:
@@ -40,7 +42,9 @@ def load_service_dates(album_id: str) -> List[str]:
     return history.get(album_id, {}).get("serviceDates", [])
 
 
-def run_analysis(album_id: str, photos: List[Photo], today: date, decided_at: str) -> AnalysisResult:
+def run_analysis(
+    album_id: str, photos: List[Photo], today: date, decided_at: str, calendar_mode: str
+) -> AnalysisResult:
     logs: List[EvidenceLogEntry] = []
     step_counter = {"value": 0}
 
@@ -109,12 +113,18 @@ def run_analysis(album_id: str, photos: List[Photo], today: date, decided_at: st
         {"status": care_status.status, "needsCareNow": care_status.needsCareNow, "reasonCodes": care_status.reasonCodes},
     )
 
-    # 6. 중요 일정 발견 (CALENDAR_MODE=CACHED -> calendar_events.json)
-    upcoming_event = calendar_service.select_nearest_care_relevant_event(album_id, today)
+    # 6. 중요 일정 발견 (CALENDAR_MODE=LIVE면 실제 Google Calendar, 실패/CACHED면 calendar_events.json)
+    upcoming_event, actual_calendar_mode, calendar_fallback_reason = calendar_service.resolve_upcoming_event(
+        album_id, today, calendar_mode
+    )
     log(
         "CALENDAR",
         "중요 일정을 조회했습니다.",
-        {"found": upcoming_event is not None, "eventId": upcoming_event.eventId if upcoming_event else None},
+        {
+            "found": upcoming_event is not None,
+            "eventId": upcoming_event.eventId if upcoming_event else None,
+            "calendarMode": actual_calendar_mode,
+        },
     )
 
     # 7. 역방향 스케줄 (네일 정책: 중요 일정 2~3일 전)
@@ -146,4 +156,6 @@ def run_analysis(album_id: str, photos: List[Photo], today: date, decided_at: st
         evidenceLogs=logs,
         canSchedule=can_schedule,
         fallbackReason=vision_fallback_reason,
+        calendarMode=actual_calendar_mode,
+        calendarFallbackReason=calendar_fallback_reason,
     )

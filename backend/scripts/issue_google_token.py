@@ -16,79 +16,30 @@ GOOGLE_CREDENTIALS_PATH / GOOGLE_TOKEN_PATH 환경변수로 덮어쓸 수 있다
 
 이 스크립트는 client secret, access token, refresh token, token.json의 내용을
 어떤 로그에도 출력하지 않는다.
+
+토큰 로드/refresh/원자적 저장의 공용 구현은 app/google_auth.py에 있다 - 이 스크립트는
+그 위에 브라우저 인증 폴백(run_installed_app_flow)만 얹은 CLI 오케스트레이션이다.
 """
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent
+# app.google_auth를 임포트하기 위해 backend/ 를 sys.path에 넣는다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.freebusy",
-]
-
-
-def credentials_path() -> Path:
-    override = os.environ.get("GOOGLE_CREDENTIALS_PATH")
-    return Path(override) if override else BACKEND_DIR / "credentials.json"
-
-
-def token_path() -> Path:
-    override = os.environ.get("GOOGLE_TOKEN_PATH")
-    return Path(override) if override else BACKEND_DIR / "token.json"
-
-
-def load_existing_credentials(path: Path):
-    """token.json이 있으면 로드한다. 읽기/파싱에 실패하면 None을 반환해 재발급으로 넘어간다."""
-    from google.oauth2.credentials import Credentials
-
-    if not path.is_file():
-        return None
-    try:
-        return Credentials.from_authorized_user_file(str(path), SCOPES)
-    except Exception as exc:
-        print(f"[WARN] 기존 {path.name}을 읽는 데 실패해 새로 발급합니다: {type(exc).__name__}", file=sys.stderr)
-        return None
-
-
-def refresh_credentials(creds) -> bool:
-    """만료된 credentials를 refresh_token으로 갱신한다. 성공하면 True."""
-    from google.auth.transport.requests import Request
-
-    try:
-        creds.refresh(Request())
-        return True
-    except Exception as exc:
-        print(f"[WARN] 토큰 갱신 실패: {type(exc).__name__}", file=sys.stderr)
-        return False
-
-
-def run_installed_app_flow(creds_path: Path):
-    """브라우저를 열어 사용자 동의를 받는다. 이 스크립트를 직접 실행할 때만 호출된다."""
-    from google_auth_oauthlib.flow import InstalledAppFlow
-
-    flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), SCOPES)
-    return flow.run_local_server(port=0)
-
-
-def save_token(creds, path: Path) -> None:
-    """token.json을 원자적으로 저장한다(중간 실패 시 기존 파일이 손상되지 않는다)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+from app.google_auth import (  # noqa: E402
+    BACKEND_DIR,
+    SCOPES,
+    credentials_path,
+    load_existing_credentials,
+    refresh_credentials,
+    run_installed_app_flow,
+    save_token,
+    token_path,
+)
 
 
 def get_credentials(creds_path: Path, tok_path: Path):

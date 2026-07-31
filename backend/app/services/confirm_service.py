@@ -33,7 +33,11 @@ def confirm_candidate(candidate_id: str, candidates_store: Dict[str, dict], albu
     checked_at = demo_clock.now_iso()
 
     # 5~7. Calendar busy 시간 재조회 -> 기존 결정론 충돌 함수(policy.is_slot_busy) 재사용 -> 충돌 시 409.
-    busy_times = calendar_service.get_busy_times(album_id, modes.calendar_mode)
+    # 이 재확인의 calendarMode는 이 응답의 calendarMode(아래 create_event 성공 여부)와 무관하다 -
+    # 실제 사용 모드/사유는 여기서 쓰지 않는다(이벤트 생성 로직은 이번 작업 범위 밖).
+    busy_times, _actual_calendar_mode, _calendar_fallback_reason = calendar_service.get_busy_times(
+        album_id, modes.calendar_mode, candidate["start"], candidate["end"]
+    )
     conflict = policy.is_slot_busy(candidate["start"], candidate["end"], busy_times)
     if conflict:
         conflicting = policy.find_conflicting_busy_times(candidate["start"], candidate["end"], busy_times)

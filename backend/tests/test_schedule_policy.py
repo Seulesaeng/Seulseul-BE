@@ -12,7 +12,9 @@ VALID_REASONS = {"권장 관리 구간 내", "Calendar 충돌 없음", "선호 �
 
 
 def _busy_times():
-    return calendar_service.get_busy_times(ALBUM_ID, "CACHED")
+    # CACHED는 start/end를 쓰지 않으므로(기존 동작 유지) 창은 의미상 아무 값이나 무방하다.
+    busy, _mode, _reason = calendar_service.get_busy_times(ALBUM_ID, "CACHED", WINDOW_START, WINDOW_END)
+    return busy
 
 
 def test_favorite_shop_search_yields_exactly_one_eligible_slot():

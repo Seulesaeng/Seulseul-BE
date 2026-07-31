@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import calendar_live_smoke_test as clst  # noqa: E402
+from app.google_auth import load_runtime_credentials as _real_load_runtime_credentials  # noqa: E402
 
 
 def _fake_creds(*, valid, expired=False, refresh_token=None):
@@ -41,69 +42,29 @@ def test_app_timezone_honors_env_override(monkeypatch):
     assert clst.app_timezone() == "UTC"
 
 
-# ---- 3~4. load_credentials(): token 로드/refresh, 브라우저 인증은 절대 실행하지 않음 ----
+# ---- 3~4. token 로드/refresh: app.google_auth.load_runtime_credentials()를 그대로 재사용한다.
+# (그 함수 자체의 로드/refresh/원자적 저장 단위 테스트는 tests/test_google_auth.py에 있다 -
+# 여기서는 run_smoke_test()가 그 함수를 올바르게 호출/전파하는지만 확인한다.) ----
 
 
-def test_load_credentials_fails_clearly_when_token_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: None)
-
-    with pytest.raises(FileNotFoundError, match="token.json"):
-        clst.load_credentials(tmp_path / "token.json")
-
-
-def test_load_credentials_reuses_valid_token_without_refresh_or_save(tmp_path, monkeypatch):
-    valid_creds = _fake_creds(valid=True)
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: valid_creds)
-
-    def _fail_if_called(*a, **k):
-        raise AssertionError("유효한 토큰은 refresh하면 안 된다.")
-
-    monkeypatch.setattr(clst, "refresh_credentials", _fail_if_called)
-    saved = []
-    monkeypatch.setattr(clst, "save_token", lambda c, p: saved.append((c, p)))
-
-    result = clst.load_credentials(tmp_path / "token.json")
-
-    assert result is valid_creds
-    assert saved == []
+def test_load_runtime_credentials_is_reused_not_reimplemented():
+    # conftest.py의 autouse 안전장치가 google_auth.load_runtime_credentials를 이미 monkeypatch했을
+    # 수 있으므로, 모듈 최상단에서 임포트 시점(어떤 fixture도 실행되기 전)에 잡아둔 원본과 비교한다.
+    assert clst.load_runtime_credentials is _real_load_runtime_credentials
 
 
-def test_load_credentials_refreshes_expired_token_and_saves_atomically(tmp_path, monkeypatch):
-    tok_path = tmp_path / "token.json"
-    expired_creds = _fake_creds(valid=False, expired=True, refresh_token="rt_123")
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: expired_creds)
+def test_run_smoke_test_propagates_load_runtime_credentials_failure(tmp_path, monkeypatch):
+    def _fail(tok_path):
+        raise FileNotFoundError(f"{tok_path}가 없습니다.")
 
-    refresh_calls = []
-    monkeypatch.setattr(clst, "refresh_credentials", lambda c: (refresh_calls.append(c), True)[1])
-    saved = []
-    monkeypatch.setattr(clst, "save_token", lambda c, p: saved.append((c, p)))
+    monkeypatch.setattr(clst, "load_runtime_credentials", _fail)
 
-    result = clst.load_credentials(tok_path)
-
-    assert result is expired_creds
-    assert refresh_calls == [expired_creds]
-    assert saved == [(expired_creds, tok_path)]
+    with pytest.raises(FileNotFoundError, match="없습니다"):
+        clst.run_smoke_test(tmp_path / "token.json", "primary", "Asia/Seoul")
 
 
-def test_load_credentials_fails_clearly_when_refresh_fails(tmp_path, monkeypatch):
-    expired_creds = _fake_creds(valid=False, expired=True, refresh_token="rt_123")
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: expired_creds)
-    monkeypatch.setattr(clst, "refresh_credentials", lambda c: False)
-
-    with pytest.raises(RuntimeError, match="갱신하지 못했습니다"):
-        clst.load_credentials(tmp_path / "token.json")
-
-
-def test_load_credentials_fails_clearly_when_not_valid_and_no_refresh_token(tmp_path, monkeypatch):
-    broken_creds = _fake_creds(valid=False, expired=False, refresh_token=None)
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: broken_creds)
-
-    with pytest.raises(RuntimeError, match="유효하지 않고"):
-        clst.load_credentials(tmp_path / "token.json")
-
-
-def test_load_credentials_never_triggers_browser_auth():
-    # issue_google_token의 run_installed_app_flow(브라우저 인증)를 이 모듈이 아예 임포트하지 않는지 확인한다.
+def test_never_triggers_browser_auth():
+    # issue_google_token 전용인 run_installed_app_flow(브라우저 인증)를 이 모듈이 임포트하지 않는지 확인한다.
     assert not hasattr(clst, "run_installed_app_flow")
 
 
@@ -234,7 +195,7 @@ def test_check_freebusy_uses_custom_calendar_id_in_items():
 
 def test_run_smoke_test_never_mutates_or_calls_calendars_get(tmp_path, monkeypatch):
     valid_creds = _fake_creds(valid=True)
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: valid_creds)
+    monkeypatch.setattr(clst, "load_runtime_credentials", lambda p: valid_creds)
 
     calls = []
     monkeypatch.setattr("googleapiclient.discovery.build", lambda *a, **k: _FakeService(calls))
@@ -255,7 +216,7 @@ def test_main_success_path_prints_summary_only_no_secrets(tmp_path, monkeypatch,
     monkeypatch.delenv("APP_TIMEZONE", raising=False)
 
     secret_creds = _fake_creds(valid=True)
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: secret_creds)
+    monkeypatch.setattr(clst, "load_runtime_credentials", lambda p: secret_creds)
 
     items = [
         {
@@ -285,7 +246,11 @@ def test_main_success_path_prints_summary_only_no_secrets(tmp_path, monkeypatch,
 
 def test_main_fails_with_exit_1_when_token_missing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(clst, "token_path", lambda: tmp_path / "token.json")
-    monkeypatch.setattr(clst, "load_existing_credentials", lambda p: None)
+
+    def _fail(tok_path):
+        raise FileNotFoundError(f"{tok_path}가 없거나 읽을 수 없습니다.")
+
+    monkeypatch.setattr(clst, "load_runtime_credentials", _fail)
 
     exit_code = clst.main()
 

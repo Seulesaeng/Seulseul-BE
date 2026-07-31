@@ -83,7 +83,9 @@ def test_prepared_candidate_confirms_successfully(client):
 def test_new_busy_time_before_confirm_causes_conflict(client, monkeypatch):
     candidate = _create_prepared_candidate(client)
     overlapping_busy = [{"start": candidate["start"], "end": candidate["end"], "summary": "갑자기 생긴 일정"}]
-    monkeypatch.setattr(calendar_service, "get_busy_times", lambda album_id, mode: overlapping_busy)
+    monkeypatch.setattr(
+        calendar_service, "get_busy_times", lambda album_id, mode, start, end: (overlapping_busy, mode, None)
+    )
 
     res = client.post(f"/api/bookings/{candidate['candidateId']}/confirm")
     assert res.status_code == 409
@@ -94,7 +96,9 @@ def test_new_busy_time_before_confirm_causes_conflict(client, monkeypatch):
 def test_conflict_keeps_candidate_prepared(client, monkeypatch):
     candidate = _create_prepared_candidate(client)
     overlapping_busy = [{"start": candidate["start"], "end": candidate["end"], "summary": "갑자기 생긴 일정"}]
-    monkeypatch.setattr(calendar_service, "get_busy_times", lambda album_id, mode: overlapping_busy)
+    monkeypatch.setattr(
+        calendar_service, "get_busy_times", lambda album_id, mode, start, end: (overlapping_busy, mode, None)
+    )
 
     client.post(f"/api/bookings/{candidate['candidateId']}/confirm")
     assert store.candidates[candidate["candidateId"]]["status"] == "PREPARED"
@@ -104,7 +108,9 @@ def test_conflict_does_not_call_create_event(client, monkeypatch):
     monkeypatch.setenv("CALENDAR_MODE", "LIVE")
     candidate = _create_prepared_candidate(client)
     overlapping_busy = [{"start": candidate["start"], "end": candidate["end"], "summary": "갑자기 생긴 일정"}]
-    monkeypatch.setattr(calendar_service, "get_busy_times", lambda album_id, mode: overlapping_busy)
+    monkeypatch.setattr(
+        calendar_service, "get_busy_times", lambda album_id, mode, start, end: (overlapping_busy, mode, None)
+    )
 
     calls = []
     monkeypatch.setattr(calendar_service, "create_event", lambda c, mode: calls.append(1))

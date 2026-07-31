@@ -20,6 +20,9 @@ backend/token.json(scripts/issue_google_token.py가 발급한, calendar.events/c
     APP_TIMEZONE        기본값 Asia/Seoul
 
 토큰, client secret, 전체 API 응답은 어떤 로그에도 출력하지 않는다.
+
+토큰 로드/refresh/원자적 저장의 공용 구현은 app/google_auth.py에 있다 - 이 스크립트는
+load_runtime_credentials()를 그대로 재사용하며(브라우저 인증 없음), 중복 구현하지 않는다.
 """
 from __future__ import annotations
 
@@ -29,10 +32,9 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# issue_google_token.py는 같은 scripts/ 디렉터리의 형제 모듈이다. 토큰 로드/refresh/원자적 저장
-# 로직을 그대로 재사용하고 중복 구현하지 않는다(OAuth 발급 자체는 이 스크립트의 역할이 아니다).
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from issue_google_token import load_existing_credentials, refresh_credentials, save_token, token_path  # noqa: E402
+# app.google_auth를 임포트하기 위해 backend/ 를 sys.path에 넣는다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.google_auth import load_runtime_credentials, token_path  # noqa: E402
 
 EVENTS_WINDOW_DAYS = 30
 FREEBUSY_WINDOW_DAYS = 7
@@ -49,31 +51,6 @@ def app_timezone() -> str:
 
 def _rfc3339(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def load_credentials(tok_path: Path):
-    """3~4단계: token.json을 로드하고 필요하면 refresh_token으로 갱신해 원자적으로 저장한다.
-    브라우저 인증은 절대 실행하지 않는다 - token.json이 없거나 갱신 불가능하면 명확히 실패한다."""
-    creds = load_existing_credentials(tok_path)
-    if creds is None:
-        raise FileNotFoundError(
-            f"{tok_path}가 없거나 읽을 수 없습니다. 먼저 scripts/issue_google_token.py를 실행해 "
-            f"token.json을 발급하세요 (이 smoke test는 브라우저 인증을 수행하지 않습니다)."
-        )
-
-    if creds.valid:
-        return creds
-
-    if creds.expired and creds.refresh_token:
-        if refresh_credentials(creds):
-            save_token(creds, tok_path)
-            return creds
-        raise RuntimeError(f"{tok_path.name}의 refresh_token으로 토큰을 갱신하지 못했습니다.")
-
-    raise RuntimeError(
-        f"{tok_path.name}이 유효하지 않고 refresh_token도 없습니다. scripts/issue_google_token.py를 "
-        f"다시 실행해 새 토큰을 발급하세요."
-    )
 
 
 def check_events(service, cal_id: str) -> list:
@@ -125,7 +102,9 @@ def check_freebusy(service, cal_id: str, tz: str) -> list:
 def run_smoke_test(tok_path: Path, cal_id: str, tz: str) -> dict:
     from googleapiclient.discovery import build
 
-    creds = load_credentials(tok_path)
+    # 3~4. token.json 로드/refresh는 app.google_auth.load_runtime_credentials()가 전담한다.
+    # 브라우저 인증은 여기서 절대 일어나지 않는다 - 없거나 갱신 불가능하면 예외가 그대로 전파된다.
+    creds = load_runtime_credentials(tok_path)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     events = check_events(service, cal_id)

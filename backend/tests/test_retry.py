@@ -246,6 +246,44 @@ def test_retry_tool_call_order_next_week(client, monkeypatch):
         assert candidate["start"].startswith("2026-08-19") or candidate["start"].startswith("2026-08-20")
 
 
+# ---- CALENDAR_MODE=LIVE: get_calendar_busy_times Tool이 실제 LIVE busy time을 사용한다 ----
+
+
+def test_retry_uses_live_busy_times_via_agent_tool_and_excludes_conflicting_slot(monkeypatch, client):
+    from app.services import calendar_service
+
+    class _FakeFreebusy:
+        def query(self, body):
+            self._body = body
+            return self
+
+        def execute(self):
+            # slot_2005(NEXT_WEEK 선호샵, 2026-08-19T19:00~20:30)와 정확히 겹치는 busy 구간.
+            return {
+                "calendars": {
+                    "primary": {"busy": [{"start": "2026-08-19T19:00:00+09:00", "end": "2026-08-19T20:30:00+09:00"}]}
+                }
+            }
+
+    class _FakeLiveService:
+        def freebusy(self):
+            return _FakeFreebusy()
+
+    monkeypatch.setenv("CALENDAR_MODE", "LIVE")
+    monkeypatch.setattr(calendar_service, "_build_live_service", lambda: _FakeLiveService())
+    _use_fake_live_agent(monkeypatch, _fake_agent_run_success)
+
+    analysis_id = _create_analysis(client)
+    body = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "NEXT_WEEK"}).json()
+
+    assert body["calendarMode"] == "LIVE"
+    excluded_ids = {e["slotId"]: e["exclusionReason"] for e in body["excludedSlots"]}
+    assert excluded_ids["slot_2005"] == "CALENDAR_BUSY"  # LIVE busy time으로 실제 제외됨
+    candidate_slot_ids = {c["slotId"] for c in body["candidates"]}
+    assert "slot_2005" not in candidate_slot_ids
+    assert candidate_slot_ids == {"slot_2006", "slot_2007"}
+
+
 # ---- 14. Agent 실패 시 fallback ----
 
 

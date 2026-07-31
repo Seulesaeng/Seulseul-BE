@@ -51,7 +51,9 @@ def _run_deterministic_fallback(
 ) -> None:
     """Agent 없이 정확히 같은 결정론 함수(app/services/policy.py)로 후보를 준비한다.
     Agent Tool(app/agent/tools.py)과 로직을 공유하며 중복 구현하지 않는다."""
-    context.busy_times = calendar_service.get_busy_times(album_id, calendar_mode)
+    context.busy_times, context.calendar_mode, context.calendar_fallback_reason = calendar_service.get_busy_times(
+        album_id, calendar_mode, context.search_start, context.search_end
+    )
     collector.record("SYSTEM", "결정론 fallback 경로를 실행합니다.", result={"reason": "agent_unavailable_or_failed"})
 
     for scope in ("FAVORITE_SHOP", "ALTERNATIVE_SHOPS"):
@@ -140,7 +142,10 @@ def run_schedule(analysis_id: str, analysis: dict, album_id: str, schedule_run_i
     )
 
     agent_mode, fallback_reason = _execute_agent_or_fallback(context, collector, album_id, modes)
-    calendar_mode, calendar_fallback_reason = calendar_service.resolve_calendar_lookup_mode(modes.calendar_mode)
+    # get_calendar_busy_times(Tool) 또는 결정론 fallback이 실제로 사용한 모드를 그대로 반영한다
+    # (context.calendar_mode는 둘 중 하나가 항상 채운다 - get_busy_times가 호출되지 않는 경로는 없다).
+    calendar_mode = context.calendar_mode or modes.calendar_mode
+    calendar_fallback_reason = context.calendar_fallback_reason
 
     recommended_window = RecommendedWindow(
         start=reverse_plan["recommendedStart"],
@@ -192,7 +197,8 @@ def run_retry(analysis_id: str, analysis: dict, album_id: str, retry_run_id: str
     )
 
     agent_mode, fallback_reason = _execute_agent_or_fallback(context, collector, album_id, modes)
-    calendar_mode, calendar_fallback_reason = calendar_service.resolve_calendar_lookup_mode(modes.calendar_mode)
+    calendar_mode = context.calendar_mode or modes.calendar_mode
+    calendar_fallback_reason = context.calendar_fallback_reason
 
     search_window = RecommendedWindow(start=next_week_start, end=next_week_end, basis=reverse_plan["basis"])
     excluded_slots = [ExcludedSlot(**slot) for slot in context.excluded_slots]

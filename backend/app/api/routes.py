@@ -72,8 +72,7 @@ def create_analysis(payload: AnalyzeRequest, request: Request) -> AnalyzeRespons
     today = demo_clock.today()
     decided_at = _now_iso()
 
-    result = analysis_service.run_analysis(payload.albumId, photos, today, decided_at)
-    calendar_mode, calendar_fallback_reason = calendar_service.resolve_calendar_lookup_mode(modes.calendar_mode)
+    result = analysis_service.run_analysis(payload.albumId, photos, today, decided_at, modes.calendar_mode)
 
     response = AnalyzeResponse(
         analysisId=analysis_id,
@@ -88,8 +87,8 @@ def create_analysis(payload: AnalyzeRequest, request: Request) -> AnalyzeRespons
         evidenceLogs=result.evidenceLogs,
         canSchedule=result.canSchedule,
         visionMode=modes.vision_mode,
-        calendarMode=calendar_mode,
-        fallbackReason=calendar_service.combine_fallback_reasons(result.fallbackReason, calendar_fallback_reason),
+        calendarMode=result.calendarMode,
+        fallbackReason=calendar_service.combine_fallback_reasons(result.fallbackReason, result.calendarFallbackReason),
     )
     store.analyses[analysis_id] = response.model_dump()
     return response
