@@ -230,7 +230,21 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 
 /**
  * @typedef {Object} RetryRequest
- * @property {"THIS_WEEK"|"NEXT_WEEK"} searchScope
+ * @property {"THIS_WEEK"|"NEXT_WEEK"} searchScope   - MVP에서는 "NEXT_WEEK"만 지원한다. 그 외 값(THIS_WEEK 포함)은 400 INVALID_REQUEST.
+ */
+
+/**
+ * @typedef {Object} RetryResponse
+ * @property {string} analysisId
+ * @property {string} retryRunId
+ * @property {"NEXT_WEEK"} searchScope
+ * @property {RecommendedWindow} searchWindow   - 기존 reversePlan의 recommendedStart/recommendedEnd에 각각 7일을 더한 구간
+ * @property {Candidate[]} candidates   - 최대 3개
+ * @property {ExcludedSlot[]} excludedSlots
+ * @property {ExecutionLogEntry[]} executionLogs
+ * @property {"LIVE"|"FALLBACK"|"CACHED"} agentMode
+ * @property {"LIVE"|"CACHED"} calendarMode
+ * @property {string|null} fallbackReason
  */
 
 /**
@@ -541,8 +555,22 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ## 5. POST /api/analyses/{analysis_id}/retry
 
-기존 분석(`selectedPhotos`, `changeSignal`, `timing`, `careStatus`, `upcomingEvent`, `reversePlan`)을 재사용하고,
-`/schedule`과 동일한 Agent 플로우를 지정한 `searchScope`로 다시 실행해 `candidates`만 새로 탐색한다.
+**MVP에서는 `searchScope`로 `"NEXT_WEEK"`만 지원한다.** `"THIS_WEEK"`를 포함한 다른 값은 400 `INVALID_REQUEST`다.
+
+기존 analysis의 결과(`selectedPhotos`, `changeSignal`, `timing`, `careStatus`, `upcomingEvent`, `reversePlan`)는
+**재계산하지 않고 그대로 재사용한다** — Vision을 다시 호출하지 않고, 사진을 다시 선택하지 않고, 시술 주기·`careStatus`를
+다시 계산하지 않고, `upcomingEvent`/`reversePlan`도 다시 계산하지 않는다. 새로 하는 일은 오직 `searchWindow`(다음 주 구간)에서
+`/schedule`과 동일한 Agent runner·Tool 3개(`get_calendar_busy_times` → `search_nail_shop_slots(FAVORITE_SHOP)` →
+부족하면 `search_nail_shop_slots(ALTERNATIVE_SHOPS)` → `prepare_booking_candidates`)를 새 `AgentRunContext`로 다시
+실행해 `candidates`를 새로 탐색하는 것뿐이다.
+
+`searchWindow`는 기존 `reversePlan.recommendedStart`/`recommendedEnd`에 각각 7일을 더해 결정론적으로 계산한다(순수 함수).
+예: `reversePlan`이 `2026-08-12`~`2026-08-13`이면 `searchWindow`는 `2026-08-19`~`2026-08-20`이다.
+
+이번 호출로 준비된 `candidates`는 이전 `/schedule`(또는 이전 `/retry`) 호출의 후보를 삭제·덮어쓰지 않는다 —
+`candidateId`는 `{retryRunId}_{slotId}` 형태라 다른 실행의 `candidateId`와 겹치지 않는다.
+
+`canSchedule`이 `false`인 analysis에는 호출할 수 없다(`SCHEDULE_NOT_APPLICABLE`), `/schedule`과 동일하다.
 
 ### Path Parameters
 
@@ -558,12 +586,49 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ### Response 200
 
-`ScheduleResponse`와 동일한 형태. `scheduleRunId`는 새로 발급되고 `recommendedWindow`가 `searchScope`만큼 이동하며 `candidates`/`excludedSlots`/`executionLogs`가 갱신된다.
+`RetryResponse` 형태(`ScheduleResponse`와 필드명이 다르다 — `scheduleRunId`/`recommendedWindow` 대신 `retryRunId`/`searchWindow`를 쓴다).
+
+```json
+{
+  "analysisId": "analysis_20260810094100_3395",
+  "retryRunId": "retry_20260810094100_1872",
+  "searchScope": "NEXT_WEEK",
+  "searchWindow": { "start": "2026-08-19", "end": "2026-08-20", "basis": "UPCOMING_EVENT" },
+  "candidates": [
+    { "candidateId": "retry_20260810094100_1872_slot_2006", "slotId": "slot_2006", "shop": "무드네일 합정", "artist": "박서현", "service": "GEL_NAIL", "price": 42000, "start": "2026-08-19T14:00:00+09:00", "end": "2026-08-19T15:30:00+09:00", "recommendationReason": "빠른 예약 가능 시간", "status": "PREPARED" },
+    { "candidateId": "retry_20260810094100_1872_slot_2005", "slotId": "slot_2005", "shop": "프리즘네일 홍대", "artist": "이나연", "service": "GEL_NAIL", "price": 45000, "start": "2026-08-19T19:00:00+09:00", "end": "2026-08-19T20:30:00+09:00", "recommendationReason": "선호 네일샵", "status": "PREPARED" },
+    { "candidateId": "retry_20260810094100_1872_slot_2007", "slotId": "slot_2007", "shop": "무드네일 합정", "artist": "이나연", "service": "GEL_NAIL", "price": 42000, "start": "2026-08-20T20:00:00+09:00", "end": "2026-08-20T21:30:00+09:00", "recommendationReason": "권장 관리 구간 내", "status": "PREPARED" }
+  ],
+  "excludedSlots": [
+    { "slotId": "slot_2001", "shop": "프리즘네일 홍대", "start": "2026-08-12T19:00:00+09:00", "end": "2026-08-12T20:30:00+09:00", "exclusionReason": "OUTSIDE_SEARCH_SCOPE" }
+  ],
+  "executionLogs": [
+    { "step": 1, "type": "SYSTEM", "tool": null, "searchScope": null, "result": { "searchStart": "2026-08-19T00:00:00+09:00", "searchEnd": "2026-08-20T23:59:59+09:00" }, "message": "다음 주(NEXT_WEEK) 예약 후보 재탐색을 시작합니다.", "exclusionReason": null },
+    { "step": 2, "type": "TOOL", "tool": "get_calendar_busy_times", "searchScope": null, "result": { "busyCount": 1 }, "message": "캘린더 바쁜 시간 조회 완료", "exclusionReason": null },
+    { "step": 3, "type": "TOOL", "tool": "search_nail_shop_slots", "searchScope": null, "result": { "searchScope": "FAVORITE_SHOP", "eligibleSlotIds": ["slot_2005"] }, "message": "FAVORITE_SHOP 슬롯 조회 완료", "exclusionReason": null },
+    { "step": 4, "type": "AGENT", "tool": null, "searchScope": null, "result": { "totalEligibleCount": 1 }, "message": "누적 후보가 1개로 목표(3개) 미만이라 추가 검색이 필요합니다.", "exclusionReason": null },
+    { "step": 5, "type": "TOOL", "tool": "search_nail_shop_slots", "searchScope": null, "result": { "searchScope": "ALTERNATIVE_SHOPS", "eligibleSlotIds": ["slot_2006", "slot_2007"] }, "message": "ALTERNATIVE_SHOPS 슬롯 조회 완료", "exclusionReason": null },
+    { "step": 6, "type": "TOOL", "tool": "prepare_booking_candidates", "searchScope": null, "result": { "preparedCandidateCount": 3 }, "message": "예약 후보 3건 준비 완료", "exclusionReason": null }
+  ],
+  "agentMode": "LIVE",
+  "calendarMode": "CACHED",
+  "fallbackReason": null
+}
+```
+
+`agentMode`/`fallbackReason`은 `/schedule`과 동일한 규칙을 따른다 — Agent가 실패하면 결정론 fallback으로 대체되고
+(`agentMode: "FALLBACK"`), Agent가 후보 준비 이후 마무리 단계에서만 실패하면 이미 준비된 후보를 그대로 쓰면서
+`fallbackReason: "AGENT_FINALIZATION_FAILED_AFTER_PREPARE"`를 반환한다.
+
+`calendarMode`는 이번 조회에 **실제로 사용한** 모드를 정직하게 반환한다 — 실제 Google Calendar LIVE 조회(바쁜 시간 조회)는
+아직 구현되지 않아(`create_event`만 LIVE 시도) `CALENDAR_MODE=LIVE`로 설정해도 실제로는 CACHED fixture를 사용하며, 이 경우
+`calendarMode: "CACHED"`와 `fallbackReason: "CALENDAR_LIVE_LOOKUP_NOT_IMPLEMENTED"`를 반환한다(`AGENT_MODE`와는 독립적).
+`fallbackReason`에 Agent 관련 사유와 동시에 해당하면 `"; "`로 이어붙여 반환한다.
 
 ### Response 400
 
 ```json
-{ "code": "INVALID_REQUEST", "message": "searchScope는 'THIS_WEEK' 또는 'NEXT_WEEK'이어야 합니다.", "detail": null }
+{ "code": "INVALID_REQUEST", "message": "MVP에서는 searchScope로 'NEXT_WEEK'만 지원합니다.", "detail": null }
 ```
 
 ### Response 404 / 409 / 502
@@ -695,5 +760,5 @@ candidate는 `PREPARED` 상태로 유지된다(`CONFIRMED`로 바뀌지 않는�
 | POST | `/api/albums/connect` | ✕ | 데모 앨범 연결 + 정렬된 사진 + scanSummary |
 | POST | `/api/analyses` | ✕ | 사진선택·Vision·주기·관리시점판정·중요일정조회·역방향구간계산 |
 | POST | `/api/analyses/{id}/schedule` | ✅ | Agent가 3-Tool로 예약 후보(최대 3개) 탐색 |
-| POST | `/api/analyses/{id}/retry` | ✅ | 동일 Agent 플로우를 다른 searchScope로 재실행 |
+| POST | `/api/analyses/{id}/retry` | ✅ | 동일 Agent 플로우를 NEXT_WEEK 구간(+7일)에서 재실행(MVP: searchScope는 NEXT_WEEK만 지원) |
 | POST | `/api/bookings/{id}/confirm` | ✕ | 재확인 + 예약 시뮬레이션 + (LIVE만) 캘린더 생성 |

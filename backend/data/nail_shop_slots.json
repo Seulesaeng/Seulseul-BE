@@ -59,6 +59,30 @@
       "favoriteShop": true,
       "searchScope": "NEXT_WEEK",
       "reasonHint": "NEXT_WEEK_OPTION"
+    },
+    {
+      "slotId": "slot_2006",
+      "shop": "무드네일 합정",
+      "artist": "박서현",
+      "service": "GEL_NAIL",
+      "price": 42000,
+      "start": "2026-08-19T14:00:00+09:00",
+      "end": "2026-08-19T15:30:00+09:00",
+      "favoriteShop": false,
+      "searchScope": "NEXT_WEEK",
+      "reasonHint": "WITHIN_RECOMMENDED_WINDOW"
+    },
+    {
+      "slotId": "slot_2007",
+      "shop": "무드네일 합정",
+      "artist": "이나연",
+      "service": "GEL_NAIL",
+      "price": 42000,
+      "start": "2026-08-20T20:00:00+09:00",
+      "end": "2026-08-20T21:30:00+09:00",
+      "favoriteShop": false,
+      "searchScope": "NEXT_WEEK",
+      "reasonHint": "FAST_AVAILABILITY"
     }
   ]
 }

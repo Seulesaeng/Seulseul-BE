@@ -77,9 +77,9 @@ def test_calendar_busy_json_has_team_meeting():
     assert busy[0]["end"] == "2026-08-13T19:30:00+09:00"
 
 
-def test_nail_shop_slots_json_has_five_slots_with_required_fields():
+def test_nail_shop_slots_json_has_seven_slots_with_required_fields():
     slots = _load("nail_shop_slots.json")["album-001"]
-    assert len(slots) == 5
+    assert len(slots) == 7
     required_fields = {
         "slotId",
         "shop",
@@ -99,12 +99,12 @@ def test_nail_shop_slots_json_has_five_slots_with_required_fields():
     scopes = [slot["searchScope"] for slot in slots]
     assert scopes.count("FAVORITE_SHOP") == 2
     assert scopes.count("ALTERNATIVE_SHOPS") == 2
-    assert scopes.count("NEXT_WEEK") == 1
+    assert scopes.count("NEXT_WEEK") == 3
 
     favorite_slots = [s for s in slots if s["favoriteShop"] is True]
     alternative_slots = [s for s in slots if s["favoriteShop"] is False]
-    assert len(favorite_slots) == 3  # slot_2001(정상), slot_2003(충돌), slot_2005(기간 밖)
-    assert len(alternative_slots) == 2  # slot_2002, slot_2004
+    assert len(favorite_slots) == 3  # slot_2001(정상), slot_2003(충돌), slot_2005(다음 주, 정상)
+    assert len(alternative_slots) == 4  # slot_2002, slot_2004, slot_2006(다음 주), slot_2007(다음 주)
 
     conflict_slot = next(s for s in slots if s["reasonHint"] == "CALENDAR_CONFLICT")
     assert conflict_slot["start"] == "2026-08-13T18:30:00+09:00"

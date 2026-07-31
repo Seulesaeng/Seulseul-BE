@@ -169,7 +169,10 @@ def test_retry_returns_next_week_candidates(client):
     res = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "NEXT_WEEK"})
     assert res.status_code == 200
     body = res.json()
-    assert body["recommendedWindow"]["start"] == "2026-08-19"
+    assert body["searchScope"] == "NEXT_WEEK"
+    assert body["searchWindow"]["start"] == "2026-08-19"
+    assert body["searchWindow"]["end"] == "2026-08-20"
+    assert "retryRunId" in body
     assert 1 <= len(body["candidates"]) <= 3
     for candidate in body["candidates"]:
         assert candidate["start"].startswith("2026-08-19") or candidate["start"].startswith("2026-08-20")
@@ -184,6 +187,14 @@ def test_retry_unknown_analysis_returns_404(client):
 def test_retry_invalid_search_scope_returns_400(client):
     analysis_id = _create_analysis(client)
     res = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "TODAY"})
+    assert res.status_code == 400
+    assert res.json()["code"] == "INVALID_REQUEST"
+
+
+def test_retry_this_week_search_scope_returns_400(client):
+    # THIS_WEEK은 SearchScope enum 자체는 유효하지만, MVP retry는 NEXT_WEEK만 지원한다.
+    analysis_id = _create_analysis(client)
+    res = client.post(f"/api/analyses/{analysis_id}/retry", json={"searchScope": "THIS_WEEK"})
     assert res.status_code == 400
     assert res.json()["code"] == "INVALID_REQUEST"
 

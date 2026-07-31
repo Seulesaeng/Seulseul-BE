@@ -1,5 +1,5 @@
-# API 라우트. docs/api-contract.md 기준. 이 단계는 6개 API 전부 목(mock) 데이터로 동작한다.
-# 실제 Vision/smolagents/Google Calendar는 아직 연결하지 않는다.
+# API 라우트. docs/api-contract.md 기준. 6개 API 전부 실제 로직으로 동작한다.
+# Google Calendar LIVE(실제 OAuth 연동)만 아직 없다 (CLAUDE.md 구현 순서 9단계).
 from __future__ import annotations
 
 import random
@@ -8,7 +8,7 @@ import string
 from fastapi import APIRouter, Request
 
 from app import demo_clock, mock_data
-from app.errors import album_not_found, analysis_not_found, schedule_not_applicable
+from app.errors import album_not_found, analysis_not_found, invalid_request, schedule_not_applicable
 from app.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -17,9 +17,10 @@ from app.models.schemas import (
     ConnectAlbumResponse,
     HealthResponse,
     RetryRequest,
+    RetryResponse,
     ScheduleResponse,
 )
-from app.services import analysis_service, confirm_service, schedule_service
+from app.services import analysis_service, calendar_service, confirm_service, schedule_service
 from app.settings import get_modes
 from app.state import store
 
@@ -72,6 +73,7 @@ def create_analysis(payload: AnalyzeRequest, request: Request) -> AnalyzeRespons
     decided_at = _now_iso()
 
     result = analysis_service.run_analysis(payload.albumId, photos, today, decided_at)
+    calendar_mode, calendar_fallback_reason = calendar_service.resolve_calendar_lookup_mode(modes.calendar_mode)
 
     response = AnalyzeResponse(
         analysisId=analysis_id,
@@ -86,8 +88,8 @@ def create_analysis(payload: AnalyzeRequest, request: Request) -> AnalyzeRespons
         evidenceLogs=result.evidenceLogs,
         canSchedule=result.canSchedule,
         visionMode=modes.vision_mode,
-        calendarMode=modes.calendar_mode,
-        fallbackReason=result.fallbackReason,
+        calendarMode=calendar_mode,
+        fallbackReason=calendar_service.combine_fallback_reasons(result.fallbackReason, calendar_fallback_reason),
     )
     store.analyses[analysis_id] = response.model_dump()
     return response
@@ -98,33 +100,6 @@ def _get_analysis_or_404(analysis_id: str) -> dict:
     if analysis is None:
         raise analysis_not_found(analysis_id)
     return analysis
-
-
-def _run_schedule_mock(analysis_id: str, search_scope: str) -> ScheduleResponse:
-    """POST /api/analyses/{id}/retry 전용 목(mock) 경로. 이번 단계는 retry를 구현하지 않는다."""
-    analysis = _get_analysis_or_404(analysis_id)
-    if not analysis["canSchedule"]:
-        raise schedule_not_applicable("관리 시점이 아니고 임박한 일정도 없어 예약 후보를 탐색할 필요가 없습니다.")
-
-    modes = get_modes()
-    schedule_run_id = _new_id("schedule")
-
-    response = ScheduleResponse(
-        analysisId=analysis_id,
-        scheduleRunId=schedule_run_id,
-        recommendedWindow=mock_data.build_recommended_window(search_scope),
-        excludedSlots=mock_data.build_excluded_slots(search_scope),
-        candidates=mock_data.build_candidates(search_scope, schedule_run_id),
-        executionLogs=mock_data.build_execution_logs(search_scope),
-        agentMode=modes.agent_mode,
-        calendarMode=modes.calendar_mode,
-        fallbackReason=None,
-    )
-
-    store.schedules[analysis_id] = response.model_dump()
-    for candidate in response.candidates:
-        store.candidates[candidate.candidateId] = candidate.model_dump()
-    return response
 
 
 @router.post("/analyses/{analysis_id}/schedule", response_model=ScheduleResponse)
@@ -161,9 +136,42 @@ def schedule_analysis(analysis_id: str) -> ScheduleResponse:
     return response
 
 
-@router.post("/analyses/{analysis_id}/retry", response_model=ScheduleResponse)
-def retry_analysis(analysis_id: str, payload: RetryRequest) -> ScheduleResponse:
-    return _run_schedule_mock(analysis_id, payload.searchScope)
+@router.post("/analyses/{analysis_id}/retry", response_model=RetryResponse)
+def retry_analysis(analysis_id: str, payload: RetryRequest) -> RetryResponse:
+    if payload.searchScope != "NEXT_WEEK":
+        raise invalid_request("MVP에서는 searchScope로 'NEXT_WEEK'만 지원합니다.")
+
+    analysis = _get_analysis_or_404(analysis_id)
+    if not analysis["canSchedule"]:
+        raise schedule_not_applicable("관리 시점이 아니고 임박한 일정도 없어 예약 후보를 탐색할 필요가 없습니다.")
+    if not analysis.get("reversePlan"):
+        raise schedule_not_applicable("역방향 권장 구간이 없어 예약 후보를 탐색할 수 없습니다.")
+
+    retry_run_id = _new_id("retry")
+    result = schedule_service.run_retry(
+        analysis_id=analysis_id,
+        analysis=analysis,
+        album_id=mock_data.ALBUM_ID,
+        retry_run_id=retry_run_id,
+    )
+
+    response = RetryResponse(
+        analysisId=analysis_id,
+        retryRunId=result.retryRunId,
+        searchScope="NEXT_WEEK",
+        searchWindow=result.searchWindow,
+        candidates=result.candidates,
+        excludedSlots=result.excludedSlots,
+        executionLogs=result.executionLogs,
+        agentMode=result.agentMode,
+        calendarMode=result.calendarMode,
+        fallbackReason=result.fallbackReason,
+    )
+
+    # 13. 기존 schedule 후보는 삭제/덮어쓰지 않는다 - candidates만 store.candidates에 추가한다.
+    for candidate in response.candidates:
+        store.candidates[candidate.candidateId] = candidate.model_dump()
+    return response
 
 
 @router.post("/bookings/{candidate_id}/confirm", response_model=ConfirmResponse)

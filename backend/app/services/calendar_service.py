@@ -4,14 +4,33 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from app.fixtures import load_json
 from app.models.schemas import UpcomingEvent
 
+CALENDAR_LOOKUP_FALLBACK_REASON = "CALENDAR_LIVE_LOOKUP_NOT_IMPLEMENTED"
+
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def resolve_calendar_lookup_mode(requested_mode: str) -> Tuple[str, Optional[str]]:
+    """get_busy_times/get_important_events는 요청된 모드와 무관하게 항상 CACHED fixture를
+    사용한다 (실제 Google Calendar LIVE 조회는 아직 구현되지 않음, CLAUDE.md 구현 순서 9단계 -
+    LIVE는 confirm의 create_event에서만 시도된다). requested_mode가 LIVE여도 이번 조회는
+    실제로 CACHED 데이터를 사용했으므로, 응답에는 실제 사용한 모드와 그 사유를 정직하게
+    반환해야 한다 (AGENT_MODE와 CALENDAR_MODE는 서로 독립적이며, Agent가 LIVE로 실행됐다는
+    이유로 Calendar까지 LIVE라고 표시하면 안 된다)."""
+    if requested_mode == "LIVE":
+        return "CACHED", CALENDAR_LOOKUP_FALLBACK_REASON
+    return requested_mode, None
+
+
+def combine_fallback_reasons(*reasons: Optional[str]) -> Optional[str]:
+    parts = [reason for reason in reasons if reason]
+    return "; ".join(parts) if parts else None
 
 
 def get_important_events(album_id: str) -> List[dict]:
