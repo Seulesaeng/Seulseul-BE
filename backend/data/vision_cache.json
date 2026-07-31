@@ -1,0 +1,9 @@
+{
+  "album-001": {
+    "changeLevel": "HIGH",
+    "trend": "INCREASING",
+    "confidence": "MEDIUM",
+    "reason": "직전 사진 대비 손톱이 자란 부분이 뚜렷하게 관찰됩니다.",
+    "visionFailed": false
+  }
+}

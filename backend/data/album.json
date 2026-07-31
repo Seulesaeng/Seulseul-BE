@@ -1,0 +1,12 @@
+{
+  "albumId": "album-001",
+  "serviceType": "네일",
+  "photos": [
+    { "photoId": "photo_04", "filename": "04.jpg", "takenAt": "2026-08-06T09:00:00+09:00", "label": "4회차" },
+    { "photoId": "photo_01", "filename": "01.jpg", "takenAt": "2026-07-16T09:00:00+09:00", "label": "1회차" },
+    { "photoId": "photo_06", "filename": "06.jpg", "takenAt": "2026-08-09T09:00:00+09:00", "label": "6회차" },
+    { "photoId": "photo_02", "filename": "02.jpg", "takenAt": "2026-07-25T09:00:00+09:00", "label": "2회차" },
+    { "photoId": "photo_05", "filename": "05.jpg", "takenAt": "2026-08-08T09:00:00+09:00", "label": "5회차" },
+    { "photoId": "photo_03", "filename": "03.jpg", "takenAt": "2026-08-02T09:00:00+09:00", "label": "3회차" }
+  ]
+}
