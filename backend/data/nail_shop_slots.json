@@ -1,0 +1,64 @@
+{
+  "album-001": [
+    {
+      "slotId": "slot_2001",
+      "shop": "프리즘네일 홍대",
+      "artist": "김아라",
+      "service": "GEL_NAIL",
+      "price": 45000,
+      "start": "2026-08-12T19:00:00+09:00",
+      "end": "2026-08-12T20:30:00+09:00",
+      "favoriteShop": true,
+      "searchScope": "FAVORITE_SHOP",
+      "reasonHint": "FAVORITE_SHOP"
+    },
+    {
+      "slotId": "slot_2002",
+      "shop": "무드네일 합정",
+      "artist": "이나연",
+      "service": "GEL_NAIL",
+      "price": 42000,
+      "start": "2026-08-12T14:00:00+09:00",
+      "end": "2026-08-12T15:30:00+09:00",
+      "favoriteShop": false,
+      "searchScope": "ALTERNATIVE_SHOPS",
+      "reasonHint": "WITHIN_RECOMMENDED_WINDOW"
+    },
+    {
+      "slotId": "slot_2003",
+      "shop": "프리즘네일 홍대",
+      "artist": "김아라",
+      "service": "GEL_NAIL",
+      "price": 45000,
+      "start": "2026-08-13T18:30:00+09:00",
+      "end": "2026-08-13T20:00:00+09:00",
+      "favoriteShop": true,
+      "searchScope": "FAVORITE_SHOP",
+      "reasonHint": "CALENDAR_CONFLICT"
+    },
+    {
+      "slotId": "slot_2004",
+      "shop": "무드네일 합정",
+      "artist": "박서현",
+      "service": "GEL_NAIL",
+      "price": 42000,
+      "start": "2026-08-13T20:00:00+09:00",
+      "end": "2026-08-13T21:30:00+09:00",
+      "favoriteShop": false,
+      "searchScope": "ALTERNATIVE_SHOPS",
+      "reasonHint": "FAST_AVAILABILITY"
+    },
+    {
+      "slotId": "slot_2005",
+      "shop": "프리즘네일 홍대",
+      "artist": "이나연",
+      "service": "GEL_NAIL",
+      "price": 45000,
+      "start": "2026-08-19T19:00:00+09:00",
+      "end": "2026-08-19T20:30:00+09:00",
+      "favoriteShop": true,
+      "searchScope": "NEXT_WEEK",
+      "reasonHint": "NEXT_WEEK_OPTION"
+    }
+  ]
+}

@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>슬슬 — 프로토타입 v2</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+:root{
+  --bg:#FAF7F5; --surface:#FFFFFF; --text:#1C1917; --text2:#8B8378;
+  --border:#EDE8E4; --fresh:#7FA87F; --soon:#E5A44C; --now:#E85D5D;
+  --agent:#5B4B8A; --black:#1C1917;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:'Pretendard',-apple-system,sans-serif;background:#2A2522;
+  min-height:100vh;padding:32px 16px 60px;color:#fff}
+
+/* ===== 변경사항 헤더 ===== */
+.chg{max-width:1000px;margin:0 auto 34px}
+.chg h1{font-size:25px;font-weight:900;letter-spacing:-.03em;text-align:center}
+.chg .sb{font-size:13px;color:#A9A099;text-align:center;margin:8px 0 24px}
+.chggrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.cg{background:#332D29;border-radius:16px;padding:17px;border-top:3px solid var(--soon)}
+.cg.key{border-top-color:var(--now)}
+.cg .n{font-size:10px;font-weight:900;color:var(--soon);letter-spacing:.1em}
+.cg.key .n{color:var(--now)}
+.cg .t{font-size:14px;font-weight:800;margin:7px 0 7px;letter-spacing:-.02em;line-height:1.35}
+.cg .d{font-size:11.5px;color:#A49A93;line-height:1.65}
+.cg .w{font-size:11px;color:#E5A44C;margin-top:9px;padding-top:9px;
+  border-top:1px dashed #4A423C;line-height:1.5;font-weight:600}
+.cg.key .w{color:#E85D5D}
+
+.stage{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+
+/* ===== phone ===== */
+.phone{width:375px;height:812px;background:var(--bg);border-radius:44px;
+  border:10px solid #0F0D0C;position:relative;overflow:hidden;
+  box-shadow:0 30px 70px rgba(0,0,0,.55);flex-shrink:0}
+.notch{position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:120px;height:28px;background:#0F0D0C;border-radius:0 0 18px 18px;z-index:100}
+.screen{position:absolute;inset:0;background:var(--bg);color:var(--text);
+  display:none;flex-direction:column;overflow:hidden}
+.screen.active{display:flex}
+.statusbar{height:52px;display:flex;align-items:flex-end;justify-content:space-between;
+  padding:0 24px 6px;font-size:12px;font-weight:600;color:var(--text)}
+.body{flex:1;overflow-y:auto;padding:0 20px 20px}
+.body::-webkit-scrollbar{display:none}
+.navbar{height:46px;display:flex;align-items:center;padding:0 20px;gap:11px;font-size:15.5px;font-weight:700}
+.back{font-size:22px;cursor:pointer;line-height:1}
+.h1{font-size:23px;font-weight:800;letter-spacing:-.035em;line-height:1.32}
+.sub{font-size:13.5px;color:var(--text2);margin-top:5px;line-height:1.5}
+.btn{width:100%;height:54px;border:none;border-radius:16px;background:var(--black);
+  color:#fff;font-family:inherit;font-size:15.5px;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:6px;transition:.15s}
+.btn:active{transform:scale(.98)}
+.btn:disabled{background:#DDD6D0}
+.btn.ag{background:var(--agent)}
+.btn-text{width:100%;height:42px;background:none;border:none;color:var(--text2);
+  font-family:inherit;font-size:13.5px;font-weight:500;cursor:pointer;margin-top:3px}
+.badge{font-size:10.5px;font-weight:700;padding:4px 9px;border-radius:99px;color:#fff}
+.b-fresh{background:var(--fresh)}.b-soon{background:var(--soon)}.b-now{background:var(--now)}
+
+/* ===== 에이전트 상태 바 ===== */
+.agbar{margin:0 20px 12px;background:#F1EEF7;border:1px solid #DDD5EC;
+  border-radius:14px;padding:10px 13px;display:flex;gap:9px;align-items:center}
+.agbar .pulse{width:7px;height:7px;border-radius:50%;background:var(--agent);
+  animation:pl 1.4s infinite;flex-shrink:0}
+@keyframes pl{0%,100%{opacity:.25;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
+.agbar .tx{font-size:11.5px;color:var(--agent);font-weight:700;line-height:1.45}
+.agbar .tx small{display:block;font-weight:500;opacity:.72;font-size:10.5px}
+
+/* ===== 캘린더 스트립 ===== */
+.cal{background:var(--surface);border-radius:20px;padding:15px 13px 12px;margin-bottom:12px}
+.calh{display:flex;justify-content:space-between;align-items:baseline;padding:0 4px 11px}
+.calh .m{font-size:14.5px;font-weight:800;letter-spacing:-.02em}
+.calh .n{font-size:11px;color:var(--text2);font-weight:600}
+.cald{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.cd{text-align:center;padding:5px 0 7px;border-radius:12px;position:relative}
+.cd .w{font-size:9.5px;color:var(--text2);font-weight:700;margin-bottom:4px}
+.cd .n{font-size:14px;font-weight:700;letter-spacing:-.03em}
+.cd.today{background:var(--black)}
+.cd.today .w,.cd.today .n{color:#fff}
+.cd .mk{display:flex;gap:2px;justify-content:center;margin-top:4px;height:5px}
+.cd .mk i{width:5px;height:5px;border-radius:50%;display:block}
+.mk .care{background:var(--soon)}
+.mk .now{background:var(--now)}
+.mk .evt{background:var(--agent)}
+.callg{display:flex;gap:11px;justify-content:center;margin-top:9px;padding-top:9px;
+  border-top:1px solid var(--border);font-size:10px;color:var(--text2);font-weight:600}
+.callg span{display:flex;align-items:center;gap:4px}
+.callg i{width:6px;height:6px;border-radius:50%}
+
+/* ===== 카드 ===== */
+.card{background:var(--surface);border-radius:20px;padding:15px;display:flex;
+  align-items:center;gap:13px;margin-bottom:9px;cursor:pointer;
+  border:1.5px solid transparent;transition:.18s}
+.card.hot{border-color:rgba(232,93,93,.35);box-shadow:0 6px 20px rgba(232,93,93,.12)}
+.ring{width:52px;height:52px;flex-shrink:0;position:relative}
+.ring .pct{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;font-size:12px;font-weight:800;letter-spacing:-.03em}
+.c-info{flex:1;min-width:0}
+.c-top{display:flex;align-items:center;gap:7px;margin-bottom:4px}
+.c-name{font-size:15.5px;font-weight:700;letter-spacing:-.02em}
+.c-meta{font-size:12px;color:var(--text2)}
+.chev{color:#CFC7C0;font-size:17px}
+
+/* 감지 알림 카드 */
+.alert{background:linear-gradient(135deg,#FFF3F2,#FFE9E6);border:1.5px solid rgba(232,93,93,.3);
+  border-radius:20px;padding:16px;margin-bottom:12px;cursor:pointer}
+.alert .hd{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.alert .hd .dt{width:7px;height:7px;border-radius:50%;background:var(--now);animation:pl 1.4s infinite}
+.alert .hd .lb{font-size:11px;font-weight:900;color:var(--now);letter-spacing:.02em}
+.alert .hd .tm{margin-left:auto;font-size:10.5px;color:#C08A85;font-weight:600}
+.alert .msg{font-size:14px;font-weight:700;line-height:1.55;letter-spacing:-.02em}
+.alert .src{font-size:11.5px;color:#A97F7B;margin-top:7px;line-height:1.5}
+.alert .go{font-size:12px;font-weight:800;color:var(--now);margin-top:11px;
+  padding-top:10px;border-top:1px dashed rgba(232,93,93,.25)}
+
+/* 역방향 카드 */
+.rev{background:#F3F1F9;border:1.5px solid #DDD5EC;border-radius:20px;
+  padding:16px;margin-bottom:11px;cursor:pointer}
+.rev .lb{font-size:10.5px;font-weight:900;color:var(--agent);letter-spacing:.06em}
+.rev .ti{font-size:14.5px;font-weight:800;margin:8px 0 9px;letter-spacing:-.02em;line-height:1.45}
+.rev .li{font-size:12.5px;color:#5F5776;line-height:1.85}
+.rev .li b{color:var(--agent)}
+.rev .go{font-size:12px;font-weight:800;color:var(--agent);margin-top:11px;
+  padding-top:10px;border-top:1px dashed #DDD5EC}
+
+.addcard{border:1.5px dashed #DDD6D0;border-radius:18px;height:50px;display:flex;
+  align-items:center;justify-content:center;color:var(--text2);font-size:13.5px;font-weight:600;cursor:pointer}
+.quota{text-align:center;font-size:11.5px;color:var(--text2);margin-top:12px}
+.quota b{color:var(--soon)}
+
+.tabbar{height:76px;border-top:1px solid var(--border);background:rgba(255,255,255,.93);
+  display:flex;padding-bottom:13px}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;font-size:10px;font-weight:600;color:#C3BAB3;cursor:pointer}
+.tab .ic{font-size:18px}
+.tab.on{color:var(--text)}
+
+/* ===== 추론 과정 ===== */
+.rzhead{background:var(--agent);color:#fff;margin:0 20px 14px;border-radius:18px;padding:15px 17px}
+.rzhead .l{font-size:10.5px;font-weight:900;opacity:.75;letter-spacing:.08em}
+.rzhead .t{font-size:16px;font-weight:800;margin-top:6px;letter-spacing:-.02em;line-height:1.4}
+.rzhead .s{font-size:11.5px;opacity:.75;margin-top:6px}
+.step{display:flex;gap:12px;position:relative;padding-bottom:16px}
+.step:last-child{padding-bottom:4px}
+.step .ln{position:absolute;left:13px;top:28px;bottom:0;width:1.5px;background:#DFD8EC}
+.step:last-child .ln{display:none}
+.step .no{width:27px;height:27px;border-radius:50%;background:var(--agent);color:#fff;
+  font-size:11.5px;font-weight:900;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;z-index:2}
+.step.ok .no{background:#fff;color:var(--agent);border:1.5px solid var(--agent)}
+.step .ct{flex:1;padding-top:2px}
+.step .st{font-size:13.5px;font-weight:800;letter-spacing:-.02em;margin-bottom:5px}
+.step .sd{font-size:12.5px;color:var(--text2);line-height:1.7}
+.step .sd b{color:var(--text);font-weight:700}
+.step .tool{display:inline-block;font-size:10px;font-family:ui-monospace,monospace;
+  background:#EFEBF7;color:var(--agent);padding:3px 8px;border-radius:6px;
+  margin-top:6px;font-weight:700}
+.step .out{background:var(--surface);border-radius:12px;padding:10px 12px;margin-top:8px;
+  font-size:12px;line-height:1.65;border-left:2.5px solid var(--agent)}
+.step .out b{color:var(--agent)}
+
+/* ===== 역방향 타임라인 ===== */
+.rline{background:var(--surface);border-radius:20px;padding:20px 18px;margin-bottom:12px}
+.rline .goal{text-align:center;background:#F3F1F9;border-radius:14px;padding:13px;margin-bottom:16px}
+.rline .goal .d{font-size:11px;font-weight:800;color:var(--agent);letter-spacing:.04em}
+.rline .goal .t{font-size:16px;font-weight:800;margin-top:4px;letter-spacing:-.02em}
+.ritem{display:flex;gap:11px;align-items:flex-start;padding-bottom:14px;position:relative}
+.ritem:last-child{padding-bottom:0}
+.ritem .ln{position:absolute;left:5.5px;top:16px;bottom:0;width:1.5px;background:var(--border)}
+.ritem:last-child .ln{display:none}
+.ritem .dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;margin-top:3px;z-index:2}
+.ritem .ct{flex:1}
+.ritem .dd{font-size:11px;font-weight:800;color:var(--text2)}
+.ritem .nm{font-size:14px;font-weight:800;letter-spacing:-.02em;margin:2px 0 3px}
+.ritem .rs{font-size:11.5px;color:var(--text2);line-height:1.55}
+
+/* ===== chat ===== */
+.chat{flex:1;overflow-y:auto;padding:6px 20px 12px;display:flex;flex-direction:column;gap:8px}
+.chat::-webkit-scrollbar{display:none}
+.bub{max-width:84%;background:var(--surface);padding:12px 15px;border-radius:18px;
+  border-bottom-left-radius:6px;font-size:14px;line-height:1.6;align-self:flex-start;
+  animation:up .3s ease both}
+@keyframes up{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+.think{align-self:flex-start;width:100%;background:#F3F1F9;border:1px solid #E2DAF0;
+  border-radius:14px;padding:11px 13px;animation:up .3s ease both}
+.think .h{font-size:10.5px;font-weight:900;color:var(--agent);letter-spacing:.05em;
+  display:flex;align-items:center;gap:6px;margin-bottom:7px}
+.think .h .dt{width:6px;height:6px;border-radius:50%;background:var(--agent);animation:pl 1.2s infinite}
+.think .l{font-size:11.5px;color:#5F5776;line-height:1.85;font-family:ui-monospace,monospace}
+.think .l b{color:var(--agent);font-weight:700}
+.slot{background:var(--surface);border:1.5px solid var(--border);border-radius:16px;
+  padding:13px 15px;cursor:pointer;animation:up .3s ease both;transition:.15s}
+.slot.sel{border-color:var(--now);background:#FFF6F5}
+.slot .r1{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.slot .sn{font-size:14.5px;font-weight:700;letter-spacing:-.02em}
+.slot .sp{font-size:13px;font-weight:600;color:var(--text2)}
+.slot .dt{font-size:13px;margin-bottom:6px}
+.slot .rs{font-size:11.5px;color:var(--agent);font-weight:600;line-height:1.5}
+.chatbot{padding:11px 20px 18px;border-top:1px solid var(--border);background:rgba(255,255,255,.9)}
+
+/* ===== 활동 로그 ===== */
+.stat{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:14px}
+.stat .s{background:var(--surface);border-radius:16px;padding:14px 10px;text-align:center}
+.stat .s .v{font-size:21px;font-weight:900;letter-spacing:-.04em;color:var(--agent)}
+.stat .s .k{font-size:10.5px;color:var(--text2);font-weight:600;margin-top:3px}
+.log{background:var(--surface);border-radius:18px;padding:6px 16px}
+.lg{display:flex;gap:11px;padding:13px 0;border-bottom:1px solid var(--border)}
+.lg:last-child{border:none}
+.lg .tm{font-size:10.5px;color:var(--text2);font-weight:700;width:52px;flex-shrink:0;padding-top:2px}
+.lg .tx{flex:1;font-size:12.5px;line-height:1.6}
+.lg .tx b{font-weight:700}
+.lg .tx small{display:block;color:var(--text2);font-size:11px;margin-top:2px}
+
+/* ===== 권한 온보딩 ===== */
+.perm{background:var(--surface);border-radius:20px;padding:18px;margin-bottom:11px;
+  border:1.5px solid var(--border);cursor:pointer;transition:.15s}
+.perm.on{border-color:var(--agent);background:#F7F5FC}
+.perm .r{display:flex;align-items:center;gap:11px}
+.perm .ic{width:40px;height:40px;border-radius:13px;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0}
+.perm.on .ic{background:#EAE4F7}
+.perm .t{font-size:14.5px;font-weight:800;letter-spacing:-.02em}
+.perm .s{font-size:11.5px;color:var(--text2);margin-top:2px;line-height:1.5}
+.perm .ck{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--border);
+  flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:transparent}
+.perm.on .ck{background:var(--agent);border-color:var(--agent);color:#fff}
+.privacy{background:#F2F0EE;border-radius:14px;padding:13px;font-size:11.5px;
+  color:var(--text2);line-height:1.7;margin-top:4px}
+
+/* 스캔 애니메이션 */
+.scan{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:0 30px}
+.scangrid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;width:100%;max-width:230px}
+.sc{aspect-ratio:1;border-radius:7px;background:#E8E0DA;opacity:.35}
+.sc.hit{background:var(--agent);opacity:1}
+.sc.on{opacity:.85}
+.scan .t{font-size:15px;font-weight:800;text-align:center;letter-spacing:-.02em}
+.scan .s{font-size:12.5px;color:var(--text2);text-align:center;line-height:1.6}
+
+.dim{position:absolute;inset:0;background:rgba(20,16,14,.5);display:none;
+  align-items:center;justify-content:center;z-index:60;padding:30px}
+.dim.on{display:flex}
+.modal{background:#fff;border-radius:24px;padding:24px 20px 18px;width:100%}
+.modal h3{font-size:17px;font-weight:800;text-align:center;letter-spacing:-.02em}
+.mbox{background:var(--bg);border-radius:14px;padding:14px;margin:16px 0;text-align:center}
+.mbox .l1{font-size:15px;font-weight:700;margin-bottom:4px}
+.mbox .l2{font-size:13px;color:var(--text2);line-height:1.6}
+.mnote{font-size:11.5px;color:var(--agent);background:#F3F1F9;border-radius:10px;
+  padding:9px 11px;margin-bottom:14px;line-height:1.55;font-weight:600}
+
+.done{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 20px}
+.check{width:72px;height:72px;border-radius:50%;background:var(--fresh);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:35px;margin-bottom:20px}
+.done h2{font-size:22px;font-weight:800;margin-bottom:20px;letter-spacing:-.03em}
+.rcpt{background:#fff;border-radius:20px;padding:19px;width:100%;margin-bottom:20px}
+.rcpt .n{font-size:16px;font-weight:700;margin-bottom:4px}
+.rcpt .d{font-size:13.5px;color:var(--text2);line-height:1.65}
+.rcpt hr{border:none;border-top:1px solid var(--border);margin:13px 0}
+.rcpt .ck{font-size:12.5px;color:var(--fresh);font-weight:600;line-height:1.9}
+.rcpt .watch{background:#F3F1F9;border-radius:11px;padding:10px 12px;margin-top:12px;
+  font-size:11.5px;color:var(--agent);line-height:1.6;font-weight:600}
+
+.ctrl{background:#332D29;border-radius:20px;padding:19px;width:224px;flex-shrink:0}
+.ctrl h3{font-size:11px;font-weight:900;color:#8A8079;letter-spacing:.07em;margin-bottom:11px}
+.ctrl button{width:100%;text-align:left;background:#3F3833;border:none;color:#DDD5CE;
+  font-family:inherit;font-size:12px;font-weight:600;padding:9px 12px;border-radius:10px;
+  margin-bottom:5px;cursor:pointer}
+.ctrl button:hover{background:#4C443E;color:#fff}
+.ctrl button.k{background:#4A3D6B;color:#D8CEF0}
+.ctrl .hint{font-size:10.5px;color:#7A716A;line-height:1.7;margin-top:12px}
+.ctrl .hint b{color:#E5A44C}
+@media(max-width:900px){.chggrid{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+
+<!-- ===== 변경사항 ===== -->
+<div class="chg">
+  <h1>프로토타입 v2 — 수정 완료</h1>
+  <div class="sb">요청하신 4가지를 반영했습니다. 아래 폰에서 직접 눌러보세요.</div>
+  <div class="chggrid">
+    <div class="cg">
+      <div class="n">CHANGE 01</div>
+      <div class="t">사진첩 자동 분석 기반</div>
+      <div class="d">사용자가 올리는 게 아니라, 앱이 밤사이 사진첩을 훑어 손·머리·눈가가 나온 사진을 찾아 상태를 판단합니다.</div>
+      <div class="w">→ 온보딩이 '권한 요청'으로, 홈이 '자동 감지 결과'로 바뀜</div>
+    </div>
+    <div class="cg">
+      <div class="n">CHANGE 02</div>
+      <div class="t">홈에 주간 캘린더</div>
+      <div class="d">케어 권장일과 내 일정이 같은 줄에 놓입니다. 관리를 '일정'으로 인식시키는 장치.</div>
+      <div class="w">→ 역방향 스케줄링의 시각적 근거가 됨</div>
+    </div>
+    <div class="cg">
+      <div class="n">CHANGE 03</div>
+      <div class="t">역방향 스케줄링</div>
+      <div class="d">8/15 결혼식을 캘린더에서 발견 → 그날 최상의 상태이려면 언제 받아야 하는지 거꾸로 계산해 먼저 제안.</div>
+      <div class="w">→ 케어 2건을 묶어서 한 번에 제안</div>
+    </div>
+    <div class="cg key">
+      <div class="n">CHANGE 04 ★</div>
+      <div class="t">"생각하는 게 보이는" 에이전트</div>
+      <div class="d">판단 근거 6단계를 화면으로 노출. 툴 호출·중간 결과·불확실할 때 되묻기까지 전부 보여줍니다.</div>
+      <div class="w">→ 예약 앱이 아니라 에이전트로 읽히는 지점</div>
+    </div>
+  </div>
+</div>
+
+<div class="stage">
+<div class="phone">
+  <div class="notch"></div>
+
+  <!-- ===== 온보딩: 권한 ===== -->
+  <div class="screen" id="s-onboard">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="body" style="padding-top:20px">
+      <div class="h1">슬슬이 대신<br>지켜볼게요</div>
+      <div class="sub">두 가지만 허락해 주시면, 그 다음부터는<br>서은님이 아무것도 안 하셔도 돼요</div>
+      <div style="height:22px"></div>
+      <div class="perm on" onclick="this.classList.toggle('on')">
+        <div class="r">
+          <div class="ic">🖼</div>
+          <div style="flex:1"><div class="t">사진첩 접근</div>
+          <div class="s">손·머리·눈가가 나온 사진만 골라<br>상태 변화를 읽어요</div></div>
+          <div class="ck">✓</div>
+        </div>
+      </div>
+      <div class="perm on" onclick="this.classList.toggle('on')">
+        <div class="r">
+          <div class="ic">📅</div>
+          <div style="flex:1"><div class="t">캘린더 연동</div>
+          <div class="s">중요한 일정 전에 미리 받도록<br>거꾸로 계산해 드려요</div></div>
+          <div class="ck">✓</div>
+        </div>
+      </div>
+      <div class="privacy">
+        🔒 <b>사진은 기기 밖으로 나가지 않습니다.</b> 분석은 온디바이스에서 이뤄지고,
+        서버에는 "네일 · 2.8mm · 8월 1일" 같은 숫자만 저장돼요. 원본도, 얼굴도 올라가지 않습니다.
+      </div>
+    </div>
+    <div style="padding:14px 20px 26px"><button class="btn ag" onclick="startScan()">허용하고 시작하기</button></div>
+  </div>
+
+  <!-- ===== 사진첩 스캔 ===== -->
+  <div class="screen" id="s-scan">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="scan">
+      <div class="scangrid" id="scangrid"></div>
+      <div class="t" id="scan-t">사진첩을 살펴보고 있어요</div>
+      <div class="s" id="scan-s">기기 안에서만 처리됩니다</div>
+    </div>
+  </div>
+
+  <!-- ===== 홈 ===== -->
+  <div class="screen active" id="s-home">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="agbar">
+      <span class="pulse"></span>
+      <div class="tx">슬슬이 밤사이 사진 34장을 확인했어요
+        <small>오늘 03:12 · 손이 나온 사진 6장에서 변화 감지</small></div>
+    </div>
+    <div class="body" style="padding-top:2px">
+      <div class="h1" style="font-size:21px">안녕하세요, 서은님</div>
+      <div class="sub">오늘 챙길 관리가 <b style="color:#E85D5D">1개</b>, 다가오는 일정이 <b style="color:#5B4B8A">1개</b> 있어요</div>
+      <div style="height:16px"></div>
+
+      <!-- 캘린더 -->
+      <div class="cal">
+        <div class="calh"><span class="m">8월</span><span class="n">이번 주</span></div>
+        <div class="cald">
+          <div class="cd today"><div class="w">월</div><div class="n">10</div><div class="mk"><i class="now"></i></div></div>
+          <div class="cd"><div class="w">화</div><div class="n">11</div><div class="mk"></div></div>
+          <div class="cd"><div class="w">수</div><div class="n">12</div><div class="mk"><i class="care"></i></div></div>
+          <div class="cd"><div class="w">목</div><div class="n">13</div><div class="mk"><i class="care"></i></div></div>
+          <div class="cd"><div class="w">금</div><div class="n">14</div><div class="mk"></div></div>
+          <div class="cd"><div class="w">토</div><div class="n">15</div><div class="mk"><i class="evt"></i></div></div>
+          <div class="cd"><div class="w">일</div><div class="n">16</div><div class="mk"></div></div>
+        </div>
+        <div class="callg">
+          <span><i style="background:#E85D5D"></i>지금 필요</span>
+          <span><i style="background:#E5A44C"></i>권장 구간</span>
+          <span><i style="background:#5B4B8A"></i>내 일정</span>
+        </div>
+      </div>
+
+      <!-- 자동 감지 알림 -->
+      <div class="alert" onclick="go('s-reason')">
+        <div class="hd"><span class="dt"></span><span class="lb">방금 감지했어요</span><span class="tm">03:12</span></div>
+        <div class="msg">어제 찍으신 사진에서<br>네일이 꽤 자란 걸 확인했어요</div>
+        <div class="src">📷 8월 9일 21:04 사진 · 자란 길이 2.8mm<br>서은님 평균보다 18% 빠른 속도예요</div>
+        <div class="go">슬슬이 어떻게 판단했는지 보기 →</div>
+      </div>
+
+      <!-- 역방향 스케줄링 -->
+      <div class="rev" onclick="go('s-reverse')">
+        <div class="lb">◈ 일정에서 거꾸로 계산했어요</div>
+        <div class="ti">8월 15일 <b>친구 결혼식</b>이 있으시네요</div>
+        <div class="li">
+          그날 가장 좋은 상태이려면<br>
+          네일은 <b>8/12~13</b>, 뿌리염색은 <b>8/11</b>까지
+        </div>
+        <div class="go">두 개 한번에 잡기 →</div>
+      </div>
+
+      <div id="cards"></div>
+      <div class="addcard">＋ 케어 추가</div>
+      <div class="quota">3/3 사용 중 · <b>프로로 무제한 →</b></div>
+    </div>
+    <div class="tabbar">
+      <div class="tab on"><div class="ic">🏠</div>홈</div>
+      <div class="tab" onclick="startChat()"><div class="ic">💬</div>슬슬</div>
+      <div class="tab" onclick="go('s-activity')"><div class="ic">📅</div>기록</div>
+      <div class="tab"><div class="ic">👤</div>마이</div>
+    </div>
+  </div>
+
+  <!-- ===== 추론 과정 ★ ===== -->
+  <div class="screen" id="s-reason">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="navbar"><span class="back" onclick="go('s-home')">‹</span> 슬슬의 판단 과정</div>
+    <div class="rzhead">
+      <div class="l">AGENT REASONING</div>
+      <div class="t">"네일을 8월 12일에<br>받으시는 게 좋겠어요"</div>
+      <div class="s">이 결론에 이르기까지 6단계를 거쳤어요</div>
+    </div>
+    <div class="body">
+      <div class="step ok"><div class="ln"></div><div class="no">1</div><div class="ct">
+        <div class="st">사진첩 훑기</div>
+        <div class="sd">최근 7일 사진 <b>34장</b> 확인<br>손이 선명하게 나온 <b>6장</b> 선별</div>
+        <span class="tool">scan_photo_library()</span>
+      </div></div>
+
+      <div class="step ok"><div class="ln"></div><div class="no">2</div><div class="ct">
+        <div class="st">상태 측정</div>
+        <div class="sd">가장 선명한 8/9 21:04 사진에서 측정</div>
+        <span class="tool">analyze_nail_growth()</span>
+        <div class="out">자란 길이 <b>2.8mm</b> · 큐티클 라인 노출<br>신뢰도 87%</div>
+      </div></div>
+
+      <div class="step ok"><div class="ln"></div><div class="no">3</div><div class="ct">
+        <div class="st">서은님 기록과 대조</div>
+        <div class="sd">지난 4회 시술 간격과 성장 속도를 비교했어요</div>
+        <div class="out">평소 <b>0.11mm/일</b> → 이번 <b>0.13mm/일</b><br><b>18% 빠름</b> · 여름철 경향과 일치</div>
+      </div></div>
+
+      <div class="step ok"><div class="ln"></div><div class="no">4</div><div class="ct">
+        <div class="st">주기 다시 계산</div>
+        <div class="sd">개인 주기를 <b>26일 → 21일</b>로 보정했어요<br>다음부터는 21일 기준으로 봐 드릴게요</div>
+        <span class="tool">update_cycle_model()</span>
+      </div></div>
+
+      <div class="step ok"><div class="ln"></div><div class="no">5</div><div class="ct">
+        <div class="st">일정 확인 후 역산</div>
+        <div class="sd">캘린더에서 <b>8/15 친구 결혼식</b>을 발견했어요</div>
+        <span class="tool">get_calendar_events()</span>
+        <div class="out">네일은 시술 <b>2~3일 후</b>가 가장 예뻐요<br>→ <b>8/12~13</b>이 최적 구간</div>
+      </div></div>
+
+      <div class="step"><div class="ln"></div><div class="no">6</div><div class="ct">
+        <div class="st">슬롯 대조</div>
+        <div class="sd">그 구간에서 서은님 빈 시간 × 샵 예약 가능 시간을 교차</div>
+        <span class="tool">search_shops() · get_free_slots()</span>
+        <div class="out">후보 <b>3개</b>를 골랐어요<br>단골샵 2곳 + 회사 근처 1곳</div>
+      </div></div>
+
+      <div style="background:#FFF8EC;border:1.5px solid rgba(229,164,76,.4);border-radius:16px;
+        padding:14px;margin-top:6px;font-size:12.5px;line-height:1.7;color:#8A6220">
+        <b style="color:#B07A28">? 하나 확실하지 않은 게 있어요</b><br>
+        8/9 사진이 실내 조명이라 색이 정확하지 않았어요. 뿌리염색은 좀 더 지켜보고 말씀드릴게요.
+      </div>
+    </div>
+    <div style="padding:12px 20px 24px"><button class="btn ag" onclick="startChat()">그럼 예약 잡아줘</button></div>
+  </div>
+
+  <!-- ===== 역방향 스케줄링 ===== -->
+  <div class="screen" id="s-reverse">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="navbar"><span class="back" onclick="go('s-home')">‹</span> 거꾸로 계산하기</div>
+    <div class="body">
+      <div class="rline">
+        <div class="goal">
+          <div class="d">8월 15일 (토)</div>
+          <div class="t">친구 결혼식</div>
+        </div>
+        <div class="ritem"><div class="ln"></div><div class="dot" style="background:var(--soon)"></div><div class="ct">
+          <div class="dd">8/11 (화) · D-4</div>
+          <div class="nm">뿌리염색</div>
+          <div class="rs">염색은 <b>3~4일 지나야</b> 색이 자연스럽게 가라앉아요</div>
+        </div></div>
+        <div class="ritem"><div class="ln"></div><div class="dot" style="background:var(--now)"></div><div class="ct">
+          <div class="dd">8/12~13 (수~목) · D-2~3</div>
+          <div class="nm">네일</div>
+          <div class="rs">시술 <b>2~3일 후</b>가 가장 깔끔해요. 당일은 오히려 부담스러워요</div>
+        </div></div>
+        <div class="ritem"><div class="ln"></div><div class="dot" style="background:var(--agent)"></div><div class="ct">
+          <div class="dd">8/15 (토)</div>
+          <div class="nm">결혼식 당일</div>
+          <div class="rs">모든 관리가 <b>가장 좋은 상태</b>로 맞춰집니다</div>
+        </div></div>
+      </div>
+      <div style="background:#F3F1F9;border-radius:16px;padding:15px;font-size:12.5px;
+        line-height:1.75;color:#5F5776">
+        <b style="color:var(--agent)">◈ 순서까지 고려했어요</b><br>
+        염색을 네일보다 먼저 잡았어요. 염색 후 손에 얼룩이 남을 수 있어서,
+        네일을 먼저 하면 이틀 만에 다시 손봐야 하거든요.
+      </div>
+    </div>
+    <div style="padding:12px 20px 24px">
+      <button class="btn ag" onclick="startChat()">두 개 한번에 잡기</button>
+      <button class="btn-text" onclick="go('s-home')">네일만 잡을래요</button>
+    </div>
+  </div>
+
+  <!-- ===== 채팅 ===== -->
+  <div class="screen" id="s-chat">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="navbar"><span class="back" onclick="go('s-home')">‹</span> 슬슬</div>
+    <div class="chat" id="chatlog"></div>
+    <div class="chatbot">
+      <button class="btn" id="bookbtn" disabled onclick="openModal()">이 시간으로 예약</button>
+    </div>
+  </div>
+
+  <!-- ===== 완료 ===== -->
+  <div class="screen" id="s-done">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="done">
+      <div class="check">✓</div>
+      <h2>예약됐어요!</h2>
+      <div class="rcpt">
+        <div class="n" id="d-shop">프리즘네일 홍대</div>
+        <div class="d" id="d-time">8월 12일 (수) 19:00<br>젤네일 · 45,000원</div>
+        <hr>
+        <div class="ck">✓ 캘린더에 추가했어요<br>✓ 하루 전에 다시 알려드릴게요</div>
+        <div class="watch">◈ 그날까지 계속 지켜볼게요<br>
+          일정이 바뀌거나 사진에서 변화가 보이면 먼저 말씀드릴게요.</div>
+      </div>
+      <button class="btn" onclick="finish()">홈으로</button>
+    </div>
+  </div>
+
+  <!-- ===== 활동 로그 ===== -->
+  <div class="screen" id="s-activity">
+    <div class="statusbar"><span>9:41</span><span>●●● ⌁ ▮</span></div>
+    <div class="navbar"><span class="back" onclick="go('s-home')">‹</span> 슬슬이 한 일</div>
+    <div class="body">
+      <div class="sub" style="margin:0 0 14px">지난 7일 동안 서은님이 아무것도 안 하시는 사이에</div>
+      <div class="stat">
+        <div class="s"><div class="v">247</div><div class="k">사진 확인</div></div>
+        <div class="s"><div class="v">12</div><div class="k">상태 측정</div></div>
+        <div class="s"><div class="v">3</div><div class="k">먼저 제안</div></div>
+      </div>
+      <div class="log">
+        <div class="lg"><div class="tm">오늘<br>03:12</div><div class="tx">
+          <b>네일 상태 변화 감지</b><small>사진 34장 확인 → 6장에서 측정 → 주기 26일→21일 보정</small></div></div>
+        <div class="lg"><div class="tm">8/8<br>02:50</div><div class="tx">
+          <b>결혼식 일정 발견</b><small>캘린더에 8/15 일정 추가됨 → 역산 스케줄 준비</small></div></div>
+        <div class="lg"><div class="tm">8/6<br>03:05</div><div class="tx">
+          <b>판단 보류</b><small>사진이 어두워 뿌리염색 상태를 확신할 수 없어 알림을 미룸</small></div></div>
+        <div class="lg"><div class="tm">8/4<br>18:30</div><div class="tx">
+          <b>예약 시간 조정 제안</b><small>야근 일정이 새로 생겨 8/5 19시 → 8/6 20시로 옮길지 물어봄</small></div></div>
+        <div class="lg"><div class="tm">8/2<br>03:01</div><div class="tx">
+          <b>속눈썹 아직 여유</b><small>사진상 밀도 양호 → 알림 보내지 않음</small></div></div>
+      </div>
+      <div style="background:#F3F1F9;border-radius:16px;padding:14px;margin-top:12px;
+        font-size:12px;color:#5F5776;line-height:1.7">
+        <b style="color:var(--agent)">알림을 보내지 않은 것도 기록해요.</b><br>
+        슬슬은 확실할 때만 말을 겁니다. 잔소리가 되는 순간 알림을 끄시니까요.
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab" onclick="go('s-home')"><div class="ic">🏠</div>홈</div>
+      <div class="tab" onclick="startChat()"><div class="ic">💬</div>슬슬</div>
+      <div class="tab on"><div class="ic">📅</div>기록</div>
+      <div class="tab"><div class="ic">👤</div>마이</div>
+    </div>
+  </div>
+
+  <!-- ===== 모달 ===== -->
+  <div class="dim" id="dim">
+    <div class="modal">
+      <h3>이렇게 예약할까요?</h3>
+      <div class="mbox">
+        <div class="l1" id="m-shop">프리즘네일 홍대</div>
+        <div class="l2" id="m-time">8월 12일 (수) 19:00<br>젤네일 · 45,000원</div>
+      </div>
+      <div class="mnote">◈ 확정 전에 꼭 여쭤봐요. 예약은 서은님이 정하시는 거예요.</div>
+      <button class="btn" onclick="confirmBook()">예약하기</button>
+      <button class="btn-text" onclick="closeModal()">다시 고를래요</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 컨트롤 ===== -->
+<div class="ctrl">
+  <h3>화면 바로가기</h3>
+  <button onclick="go('s-onboard')">O-1 권한 온보딩</button>
+  <button onclick="startScan()">O-2 사진첩 스캔</button>
+  <button onclick="resetHome()">H-1 홈 (캘린더) ★</button>
+  <button class="k" onclick="go('s-reason')">R-1 판단 과정 ★★</button>
+  <button class="k" onclick="go('s-reverse')">R-2 역방향 스케줄링 ★</button>
+  <button onclick="startChat()">C-2 채팅·슬롯</button>
+  <button onclick="go('s-done')">C-4 예약 완료</button>
+  <button class="k" onclick="go('s-activity')">A-1 활동 로그 ★</button>
+  <div class="hint">
+    <b>시연 경로</b><br>
+    홈(자동 감지 알림) → 판단 과정 6단계 → 역방향 스케줄링 → 슬롯 제안 → 승인 → 완료 → 활동 로그
+  </div>
+</div>
+</div>
+
+<script>
+const CARES=[
+ {name:'네일',pct:1.05,note:'8/9 사진 기준 · 지금이에요'},
+ {name:'뿌리염색',pct:0.78,note:'8/11 권장 · 결혼식 역산'},
+ {name:'속눈썹펌',pct:0.34,note:'사진상 아직 여유'}
+];
+const SLOTS=[
+ {shop:'프리즘네일 홍대',time:'8/12 (수) 19:00',price:'45,000',
+  why:'★ 결혼식 D-3 · 서은님이 4번 가신 곳',full:'8월 12일 (수) 19:00'},
+ {shop:'무드네일 합정',time:'8/13 (목) 20:00',price:'42,000',
+  why:'◎ 회사에서 10분 · 그날 야근 없으세요',full:'8월 13일 (목) 20:00'},
+ {shop:'프리즘네일 홍대',time:'8/12 (수) 14:00',price:'45,000',
+  why:'☼ 반차 쓰시면 여유롭게 · 대기 없음',full:'8월 12일 (수) 14:00'}
+];
+let picked=null;
+
+function go(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');}
+function stateOf(p){return p>=1?'now':(p>=0.7?'soon':'fresh')}
+function labelOf(s){return {now:'지금',soon:'슬슬',fresh:'아직'}[s]}
+
+function renderHome(){
+  const box=document.getElementById('cards');box.innerHTML='';
+  CARES.slice().sort((a,b)=>b.pct-a.pct).forEach(c=>{
+    const st=stateOf(c.pct);
+    const col=getComputedStyle(document.documentElement).getPropertyValue('--'+st).trim();
+    const r=22,C=2*Math.PI*r,off=C*(1-Math.min(c.pct,1));
+    const el=document.createElement('div');
+    el.className='card'+(st==='now'?' hot':'');
+    el.innerHTML=`<div class="ring"><svg width="52" height="52">
+      <circle cx="26" cy="26" r="${r}" fill="none" stroke="#EDE8E4" stroke-width="4.5"/>
+      <circle cx="26" cy="26" r="${r}" fill="none" stroke="${col}" stroke-width="4.5"
+        stroke-linecap="round" stroke-dasharray="${C}" stroke-dashoffset="${off}"
+        transform="rotate(-90 26 26)"/></svg>
+      <div class="pct" style="color:${col}">${Math.round(c.pct*100)}%</div></div>
+      <div class="c-info"><div class="c-top"><span class="c-name">${c.name}</span>
+      <span class="badge b-${st}">${labelOf(st)}</span></div>
+      <div class="c-meta">${c.note}</div></div><div class="chev">›</div>`;
+    el.onclick=()=>c.name==='네일'?go('s-reason'):null;
+    box.appendChild(el);
+  });
+}
+
+/* 사진첩 스캔 */
+function startScan(){
+  go('s-scan');
+  const g=document.getElementById('scangrid');g.innerHTML='';
+  for(let i=0;i<20;i++){const d=document.createElement('div');d.className='sc';g.appendChild(d)}
+  const cells=[...g.children];
+  const hits=[2,5,9,13,16,18];
+  let i=0;
+  const t=setInterval(()=>{
+    if(i<cells.length){
+      cells[i].classList.add(hits.includes(i)?'hit':'on');
+      i++;
+    } else {
+      clearInterval(t);
+      document.getElementById('scan-t').textContent='6장에서 변화를 찾았어요';
+      document.getElementById('scan-s').textContent='이제부터는 알아서 지켜볼게요';
+      setTimeout(()=>go('s-home'),1100);
+    }
+  },110);
+  document.getElementById('scan-t').textContent='사진첩을 살펴보고 있어요';
+  document.getElementById('scan-s').textContent='기기 안에서만 처리됩니다';
+}
+
+/* 채팅 */
+function startChat(){
+  go('s-chat');
+  const log=document.getElementById('chatlog');log.innerHTML='';
+  picked=null;document.getElementById('bookbtn').disabled=true;
+  const seq=[
+    {t:'bub',d:300,v:'네일 상태 확인했어요. 8월 15일 결혼식까지 고려하면 12~13일이 가장 좋겠어요.'},
+    {t:'think',d:800,v:['<b>get_calendar_events()</b> → 8/12 19시 이후 비어 있음',
+                        '<b>search_shops(nail, 홍대)</b> → 후보 7곳',
+                        '<b>filter(단골 우선)</b> → 프리즘네일 4회 방문 기록',
+                        '<b>cross(빈시간 × 예약가능)</b> → 3개로 좁힘']},
+    {t:'bub',d:2600,v:'세 개 골라봤어요. 왜 골랐는지도 같이 적어뒀어요.'},
+    {t:'slot',d:3100,v:0},{t:'slot',d:3300,v:1},{t:'slot',d:3500,v:2},
+    {t:'bub',d:4000,v:'참고로 뿌리염색은 8월 11일에 먼저 받으시는 걸 추천해요. 염색 후 손에 얼룩이 남을 수 있어서 순서를 그렇게 잡았어요.'}
+  ];
+  seq.forEach(s=>setTimeout(()=>{
+    const el=document.createElement('div');
+    if(s.t==='bub'){el.className='bub';el.textContent=s.v}
+    else if(s.t==='think'){el.className='think';
+      el.innerHTML='<div class="h"><span class="dt"></span>슬슬이 확인하는 중</div>'+
+        '<div class="l">'+s.v.join('<br>')+'</div>'}
+    else{const k=SLOTS[s.v];el.className='slot';
+      el.innerHTML=`<div class="r1"><span class="sn">${k.shop}</span><span class="sp">${k.price}원</span></div>
+        <div class="dt">${k.time}</div><div class="rs">${k.why}</div>`;
+      el.onclick=()=>pick(s.v,el)}
+    log.appendChild(el);log.scrollTop=log.scrollHeight;
+  },s.d));
+}
+function pick(i,el){document.querySelectorAll('.slot').forEach(s=>s.classList.remove('sel'));
+  el.classList.add('sel');picked=i;document.getElementById('bookbtn').disabled=false}
+function openModal(){if(picked===null)return;const k=SLOTS[picked];
+  document.getElementById('m-shop').textContent=k.shop;
+  document.getElementById('m-time').innerHTML=`${k.full}<br>젤네일 · ${k.price}원`;
+  document.getElementById('dim').classList.add('on')}
+function closeModal(){document.getElementById('dim').classList.remove('on')}
+function confirmBook(){const k=SLOTS[picked];
+  document.getElementById('d-shop').textContent=k.shop;
+  document.getElementById('d-time').innerHTML=`${k.full}<br>젤네일 · ${k.price}원`;
+  closeModal();go('s-done')}
+function finish(){CARES[0].pct=0.05;CARES[0].note='8/12 예약 완료 · D-21';renderHome();go('s-home')}
+function resetHome(){CARES[0].pct=1.05;CARES[0].note='8/9 사진 기준 · 지금이에요';renderHome();go('s-home')}
+renderHome();
+</script>
+</body>
+</html>
