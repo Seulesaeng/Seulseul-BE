@@ -35,6 +35,12 @@ def candidate_not_found(candidate_id: str) -> ApiException:
     )
 
 
+def invalid_candidate_status(candidate_id: str, status: str) -> ApiException:
+    return ApiException(
+        409, "INVALID_CANDIDATE_STATUS", f"candidate_id '{candidate_id}'의 상태가 올바르지 않습니다: {status}"
+    )
+
+
 def calendar_conflict(message: str, detail: Optional[Any] = None) -> ApiException:
     return ApiException(409, "CALENDAR_CONFLICT", message, detail)
 

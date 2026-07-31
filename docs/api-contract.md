@@ -15,6 +15,7 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 - **Agent(smolagents ToolCallingAgent)는 `POST /api/analyses/{analysis_id}/schedule`와 `POST /api/analyses/{analysis_id}/retry`에서만 실행된다.**
   `POST /api/analyses`는 일반 결정론 코드만 실행하며 `candidates`/`executionLogs`를 반환하지 않는다.
 - `POST /api/bookings/{candidate_id}/confirm`만 실제 Google Calendar 이벤트를 생성할 수 있다(`CALENDAR_MODE=LIVE`일 때). 다른 어떤 엔드포인트도, Agent도 이벤트를 생성하지 않는다.
+  단, 이 저장소에는 아직 실제 Google Calendar OAuth 연동이 없어 `CALENDAR_MODE=LIVE`로 confirm을 호출하면 현재는 항상 `502 EXTERNAL_SERVICE_ERROR`로 실패하는 것이 정상이다(가짜 성공 이벤트를 만들지 않는다).
 - `evidenceLogs`/`executionLogs`/`changeSignal.reason`/`careStatus.message` 등 모든 로그·설명 텍스트는 결정론 코드가 생성한 문자열이다. LLM이 생성한 자유 서술 문장은 어떤 필드에도 담기지 않는다.
 
 ## HTTP 상태 코드
@@ -24,7 +25,7 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 | 200 | OK | 모든 성공 응답 |
 | 400 | Bad Request | `INVALID_REQUEST` |
 | 404 | Not Found | `ALBUM_NOT_FOUND`, `ANALYSIS_NOT_FOUND`, `CANDIDATE_NOT_FOUND` |
-| 409 | Conflict | `CALENDAR_CONFLICT`, `SCHEDULE_NOT_APPLICABLE` |
+| 409 | Conflict | `CALENDAR_CONFLICT`, `SCHEDULE_NOT_APPLICABLE`, `INVALID_CANDIDATE_STATUS` |
 | 502 | Bad Gateway | `EXTERNAL_SERVICE_ERROR` |
 
 ## 공통 오류 응답
@@ -45,9 +46,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 | `ALBUM_NOT_FOUND` | 404 | `POST /api/albums/connect`, `POST /api/analyses` | `album.json`을 찾을 수 없거나 `albumId`가 일치하지 않음 |
 | `ANALYSIS_NOT_FOUND` | 404 | `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry` | `analysis_id`가 존재하지 않음 |
 | `SCHEDULE_NOT_APPLICABLE` | 409 | `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry` | 해당 analysis의 `canSchedule`이 `false`라 탐색할 필요가 없음 |
-| `CANDIDATE_NOT_FOUND` | 404 | `POST /api/bookings/{id}/confirm` | `candidate_id`가 존재하지 않거나 이미 `CONFIRMED`라 더 이상 승인 대상이 아님 |
-| `CALENDAR_CONFLICT` | 409 | `POST /api/bookings/{id}/confirm` | 승인 직전 재조회 결과 해당 시간대에 Calendar 충돌 발생 |
-| `EXTERNAL_SERVICE_ERROR` | 502 | `POST /api/analyses`, `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry`, `POST /api/bookings/{id}/confirm` | Vision/Calendar/LLM 등 외부 호출 실패 |
+| `CANDIDATE_NOT_FOUND` | 404 | `POST /api/bookings/{id}/confirm` | `candidate_id`가 존재하지 않음. 이미 `CONFIRMED`인 candidate는 404가 아니라 200으로 기존 확정 결과를 그대로 반환한다(멱등) |
+| `INVALID_CANDIDATE_STATUS` | 409 | `POST /api/bookings/{id}/confirm` | candidate 상태가 `PREPARED`도 `CONFIRMED`도 아닌 방어적 이상 상태 |
+| `CALENDAR_CONFLICT` | 409 | `POST /api/bookings/{id}/confirm` | 승인 직전 재조회 결과 해당 시간대에 Calendar 충돌 발생. candidate는 `PREPARED`로 유지된다 |
+| `EXTERNAL_SERVICE_ERROR` | 502 | `POST /api/analyses`, `POST /api/analyses/{id}/schedule`, `POST /api/analyses/{id}/retry`, `POST /api/bookings/{id}/confirm` | Vision/Calendar/LLM 등 외부 호출 실패. confirm에서는 `CALENDAR_MODE=LIVE` 이벤트 생성 실패 시 발생하며 candidate는 `PREPARED`로 유지된다(현재는 OAuth 미연동으로 항상 이 응답) |
 
 ---
 
@@ -232,6 +234,33 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
  */
 
 /**
+ * @typedef {Object} BusyTimeRange
+ * @property {string} start
+ * @property {string} end
+ */
+
+/**
+ * @typedef {Object} RecheckResult
+ * @property {boolean} conflict
+ * @property {string} checkedAt
+ * @property {BusyTimeRange[]} conflictingBusyTimes   - conflict=false면 항상 빈 배열
+ */
+
+/**
+ * @typedef {Object} ShopBooking
+ * @property {boolean} simulated          - 항상 true. 실제 네일샵 예약이 아니다
+ * @property {string} confirmationCode    - 최초 성공 시 한 번만 생성되고, 이후 재확인/재호출에도 재사용된다
+ */
+
+/**
+ * @typedef {Object} CalendarEventResult
+ * @property {boolean} created
+ * @property {boolean} simulated
+ * @property {string|null} eventId
+ * @property {string|null} htmlLink
+ */
+
+/**
  * @typedef {Object} ConfirmResponse
  * @property {string} candidateId
  * @property {string} slotId
@@ -244,9 +273,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
  * @property {string} recommendationReason
  * @property {"CONFIRMED"} status
  * @property {string} confirmedAt
- * @property {{conflict: boolean, checkedAt: string}} recheck
- * @property {{simulated: boolean, confirmationCode: string}} shopBooking
- * @property {{created: boolean, simulated: boolean, eventId: string|null, htmlLink: string|null}} calendarEvent
+ * @property {"SIMULATED"} reservationMode   - 항상 "SIMULATED". 실제 미용실 예약이 아니다
+ * @property {RecheckResult} recheck
+ * @property {ShopBooking} shopBooking
+ * @property {CalendarEventResult} calendarEvent
  * @property {"LIVE"|"CACHED"} calendarMode
  */
 
@@ -544,10 +574,17 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 ## 6. POST /api/bookings/{candidate_id}/confirm
 
-1. **상태 확인**: `candidate_id`가 존재하고 `status === "PREPARED"`인지 확인한다.
-2. **재확인**: 결정론 코드로 Google Calendar를 다시 조회해 충돌 여부를 확인한다(Agent 아님).
-3. **예약 시뮬레이션**: 충돌이 없으면 네일샵 예약 성공을 시뮬레이션한다(항상 시뮬레이션).
-4. **캘린더 생성**: `CALENDAR_MODE=LIVE`일 때만 실제 Google Calendar 이벤트를 생성한다.
+1. **조회**: `candidate_id`로 인메모리 candidate를 조회한다. 없으면 404 `CANDIDATE_NOT_FOUND`.
+2. **멱등 처리**: `status`가 이미 `CONFIRMED`면 재확인·예약 시뮬레이션·Calendar 이벤트 생성을 다시 하지 않고, 최초 확정 시 저장해둔 응답을 그대로 반환한다(`confirmationCode`/`eventId`도 새로 만들지 않는다).
+3. `status`가 `PREPARED`도 `CONFIRMED`도 아니면(방어적 이상 상태) 409 `INVALID_CANDIDATE_STATUS`.
+4. **재확인**: 결정론 코드로 Google Calendar 바쁜 시간을 다시 조회해, 슬롯 검색 때 쓰는 것과 동일한 순수 충돌 판정 함수로 겹침을 확인한다(Agent 아님).
+5. 새 충돌이 있으면 409 `CALENDAR_CONFLICT` — candidate는 `PREPARED`로 유지되고 Calendar 이벤트 생성 함수는 호출되지 않는다.
+6. 충돌이 없으면 네일샵 예약 성공을 시뮬레이션한다(`shopBooking`, 항상 시뮬레이션. `confirmationCode`는 이 시점에 한 번만 생성).
+7. `CALENDAR_MODE`에 따라 Calendar 이벤트를 처리한다:
+   - `CACHED`: 실제 이벤트를 생성하지 않는다.
+   - `LIVE`: 실제 Google Calendar 이벤트 생성을 시도한다. **생성에 성공했을 때만** candidate를 `CONFIRMED`로 바꾼다. 실패하면 502 `EXTERNAL_SERVICE_ERROR`이며 candidate는 `PREPARED`로 유지된다.
+     이 저장소에는 아직 실제 Google Calendar OAuth 연동이 없다 — 따라서 **지금은 `CALENDAR_MODE=LIVE`로 confirm을 호출하면 항상 502가 정상 동작**이다(가짜 성공 이벤트를 만들지 않는다).
+8. 모든 필수 처리가 성공한 뒤에만 candidate를 `CONFIRMED`로 바꾸고 `confirmedAt`과 확정 결과를 저장한다.
 
 ### Path Parameters
 
@@ -561,31 +598,50 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 {}
 ```
 
-### Response 200 — `CALENDAR_MODE=CACHED`
+### Response 200 — `CALENDAR_MODE=CACHED` (최초 확정)
 
 ```json
 {
-  "candidateId": "cand_01",
-  "slotId": "slot_1203",
-  "shop": "슬슬네일 강남점",
+  "candidateId": "schedule_20260810094100_8077_slot_2001",
+  "slotId": "slot_2001",
+  "shop": "프리즘네일 홍대",
   "artist": "김아라",
-  "service": "젤네일",
+  "service": "GEL_NAIL",
   "price": 45000,
-  "start": "2026-08-12T14:00:00+09:00",
-  "end": "2026-08-12T15:00:00+09:00",
+  "start": "2026-08-12T19:00:00+09:00",
+  "end": "2026-08-12T20:30:00+09:00",
   "recommendationReason": "선호 네일샵",
   "status": "CONFIRMED",
-  "confirmedAt": "2026-08-01T09:05:00+09:00",
-  "recheck": { "conflict": false, "checkedAt": "2026-08-01T09:04:59+09:00" },
-  "shopBooking": { "simulated": true, "confirmationCode": "SIM-20260801-0001" },
-  "calendarEvent": { "created": false, "simulated": true, "eventId": null, "htmlLink": null },
+  "confirmedAt": "2026-08-10T09:41:00+09:00",
+  "reservationMode": "SIMULATED",
+  "recheck": {
+    "conflict": false,
+    "checkedAt": "2026-08-10T09:41:00+09:00",
+    "conflictingBusyTimes": []
+  },
+  "shopBooking": {
+    "simulated": true,
+    "confirmationCode": "SIM-20260810094100-t_2001"
+  },
+  "calendarEvent": {
+    "created": false,
+    "simulated": true,
+    "eventId": null,
+    "htmlLink": null
+  },
   "calendarMode": "CACHED"
 }
 ```
 
-### Response 200 — `CALENDAR_MODE=LIVE` (성공)
+`reservationMode`는 항상 `"SIMULATED"`다(미용실 예약은 항상 시뮬레이션). `CALENDAR_MODE=CACHED`에서는 `calendarEvent.created`가 항상 `false`, `eventId`/`htmlLink`가 항상 `null`이다 — 프론트가 "Google Calendar에 실제 추가됨"으로 오해할 값을 반환하지 않는다.
 
-`calendarEvent`만 다음과 같이 달라진다.
+### Response 200 — 동일 candidate 중복 confirm (멱등)
+
+같은 `candidate_id`로 다시 호출해도 최초 확정 시 응답과 완전히 동일한 JSON이 그대로 반환된다(`confirmedAt`, `shopBooking.confirmationCode`, `calendarEvent` 전부 동일). 이벤트를 다시 생성하거나 `confirmationCode`를 다시 만들지 않는다.
+
+### Response 200 — `CALENDAR_MODE=LIVE` (실제 연동 완료 이후, 성공 시)
+
+`calendarEvent`만 다음과 같이 달라진다. **실제 OAuth 연동이 아직 없어 이 응답은 향후 구현 이후에만 발생한다** — 지금은 아래 502 응답이 정상이다.
 
 ```json
 { "created": true, "simulated": false, "eventId": "g_evt_abc123", "htmlLink": "https://calendar.google.com/event?eid=..." }
@@ -597,17 +653,37 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 { "code": "CANDIDATE_NOT_FOUND", "message": "candidate_id 'cand_xx'를 찾을 수 없거나 더 이상 승인할 수 없습니다.", "detail": null }
 ```
 
-### Response 409
+### Response 409 — `INVALID_CANDIDATE_STATUS`
 
 ```json
-{ "code": "CALENDAR_CONFLICT", "message": "재확인 결과 해당 시간대에 캘린더 일정이 생겨 예약할 수 없습니다.", "detail": { "conflict": true, "checkedAt": "2026-08-01T09:04:59+09:00" } }
+{ "code": "INVALID_CANDIDATE_STATUS", "message": "candidate_id 'cand_xx'의 상태가 올바르지 않습니다: SOMETHING_ELSE", "detail": null }
 ```
 
-### Response 502
+### Response 409 — `CALENDAR_CONFLICT`
 
 ```json
-{ "code": "EXTERNAL_SERVICE_ERROR", "message": "Google Calendar 이벤트 생성에 실패했습니다.", "detail": null }
+{
+  "code": "CALENDAR_CONFLICT",
+  "message": "재확인 결과 해당 시간대에 캘린더 일정이 생겨 예약할 수 없습니다.",
+  "detail": {
+    "conflict": true,
+    "checkedAt": "2026-08-10T09:41:00+09:00",
+    "conflictingBusyTimes": [
+      { "start": "2026-08-12T19:15:00+09:00", "end": "2026-08-12T19:45:00+09:00" }
+    ]
+  }
+}
 ```
+
+candidate는 `PREPARED` 상태로 유지되며, Calendar 이벤트 생성 함수는 호출되지 않는다.
+
+### Response 502 — `CALENDAR_MODE=LIVE` 이벤트 생성 실패 (현재는 항상 이 응답)
+
+```json
+{ "code": "EXTERNAL_SERVICE_ERROR", "message": "Google Calendar 이벤트 생성에 실패했습니다: ...", "detail": null }
+```
+
+candidate는 `PREPARED` 상태로 유지된다(`CONFIRMED`로 바뀌지 않는다).
 
 ---
 

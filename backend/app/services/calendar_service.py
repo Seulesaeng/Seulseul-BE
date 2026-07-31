@@ -34,3 +34,11 @@ def get_busy_times(album_id: str, calendar_mode: str) -> List[dict]:
     현재는 CACHED와 동일하게 fixture를 사용한다."""
     busy = load_json("calendar_busy.json")
     return busy.get(album_id, [])
+
+
+def create_event(candidate: dict, calendar_mode: str) -> dict:
+    """CALENDAR_MODE=LIVE일 때 실제 Google Calendar에 이벤트를 생성한다
+    (POST /api/bookings/{id}/confirm 전용, Agent Tool 아님).
+    실제 OAuth 연동은 아직 없다 (CLAUDE.md 구현 순서 9단계) — 지금은 항상 실패한다.
+    호출자는 이 예외를 EXTERNAL_SERVICE_ERROR로 변환하고 candidate를 PREPARED로 유지해야 한다."""
+    raise RuntimeError("Google Calendar LIVE 이벤트 생성은 아직 구현되지 않았습니다 (CLAUDE.md 구현 순서 9단계).")

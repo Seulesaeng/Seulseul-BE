@@ -189,9 +189,15 @@ class RetryRequest(BaseModel):
     searchScope: SearchScope
 
 
+class BusyTimeRange(BaseModel):
+    start: str
+    end: str
+
+
 class RecheckResult(BaseModel):
     conflict: bool
     checkedAt: str
+    conflictingBusyTimes: List[BusyTimeRange] = []
 
 
 class ShopBooking(BaseModel):
@@ -218,6 +224,7 @@ class ConfirmResponse(BaseModel):
     recommendationReason: str
     status: Literal["CONFIRMED"]
     confirmedAt: str
+    reservationMode: Literal["SIMULATED"]
     recheck: RecheckResult
     shopBooking: ShopBooking
     calendarEvent: CalendarEventResult

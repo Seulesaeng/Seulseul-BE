@@ -8,7 +8,7 @@ import string
 from fastapi import APIRouter, Request
 
 from app import demo_clock, mock_data
-from app.errors import album_not_found, analysis_not_found, candidate_not_found, schedule_not_applicable
+from app.errors import album_not_found, analysis_not_found, schedule_not_applicable
 from app.models.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
@@ -19,7 +19,7 @@ from app.models.schemas import (
     RetryRequest,
     ScheduleResponse,
 )
-from app.services import analysis_service, schedule_service
+from app.services import analysis_service, confirm_service, schedule_service
 from app.settings import get_modes
 from app.state import store
 
@@ -168,28 +168,4 @@ def retry_analysis(analysis_id: str, payload: RetryRequest) -> ScheduleResponse:
 
 @router.post("/bookings/{candidate_id}/confirm", response_model=ConfirmResponse)
 def confirm_booking(candidate_id: str) -> ConfirmResponse:
-    candidate = store.candidates.get(candidate_id)
-    if candidate is None or candidate["status"] != "PREPARED":
-        raise candidate_not_found(candidate_id)
-
-    modes = get_modes()
-    confirmed_at = _now_iso()
-    candidate["status"] = "CONFIRMED"
-
-    return ConfirmResponse(
-        candidateId=candidate["candidateId"],
-        slotId=candidate["slotId"],
-        shop=candidate["shop"],
-        artist=candidate["artist"],
-        service=candidate["service"],
-        price=candidate["price"],
-        start=candidate["start"],
-        end=candidate["end"],
-        recommendationReason=candidate["recommendationReason"],
-        status="CONFIRMED",
-        confirmedAt=confirmed_at,
-        recheck=mock_data.build_recheck(confirmed_at),
-        shopBooking=mock_data.build_shop_booking(),
-        calendarEvent=mock_data.build_calendar_event(modes.calendar_mode),
-        calendarMode=modes.calendar_mode,
-    )
+    return confirm_service.confirm_candidate(candidate_id, store.candidates, mock_data.ALBUM_ID)
