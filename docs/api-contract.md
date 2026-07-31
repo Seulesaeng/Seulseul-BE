@@ -14,9 +14,10 @@ API 응답 필드를 변경할 때는 반드시 이 문서를 먼저 수정한 �
 - 배열 필드는 값이 없을 때 `null`이 아니라 빈 배열(`[]`)이다.
 - **Agent(smolagents ToolCallingAgent)는 `POST /api/analyses/{analysis_id}/schedule`와 `POST /api/analyses/{analysis_id}/retry`에서만 실행된다.**
   `POST /api/analyses`는 일반 결정론 코드만 실행하며 `candidates`/`executionLogs`를 반환하지 않는다.
-- `POST /api/bookings/{candidate_id}/confirm`만 실제 Google Calendar 이벤트를 생성할 수 있다(`CALENDAR_MODE=LIVE`일 때). 다른 어떤 엔드포인트도, Agent도 이벤트를 생성하지 않는다.
-  단, 이 저장소에는 아직 실제 Google Calendar OAuth 연동이 없어 `CALENDAR_MODE=LIVE`로 confirm을 호출하면 현재는 항상 `502 EXTERNAL_SERVICE_ERROR`로 실패하는 것이 정상이다(가짜 성공 이벤트를 만들지 않는다).
+- `POST /api/bookings/{candidate_id}/confirm`만 실제 Google Calendar 이벤트를 생성할 수 있다(`CALENDAR_MODE=LIVE`일 때, `events().insert()` 1건). 다른 어떤 엔드포인트도, Agent도 이벤트를 생성하지 않는다.
+  LIVE 읽기(중요 일정 조회, Free/Busy 조회)와 이벤트 생성 모두 실제 Google Calendar OAuth 연동으로 동작한다. LIVE 호출이 실패하면 읽기 계열(`/analyses`, `/schedule`, `/retry`)은 CACHED로 자동 fallback하지만, `/confirm`의 승인 직전 안전성 재확인은 CACHED로 조용히 대체하지 않고 `502 EXTERNAL_SERVICE_ERROR`로 안전하게 실패한다(아래 6번 문서 참고).
 - `evidenceLogs`/`executionLogs`/`changeSignal.reason`/`careStatus.message` 등 모든 로그·설명 텍스트는 결정론 코드가 생성한 문자열이다. LLM이 생성한 자유 서술 문장은 어떤 필드에도 담기지 않는다.
+- **CORS**: `backend/.env`의 `FRONTEND_ORIGIN`에 등록된 origin만 허용한다(쉼표로 복수 지정 가능). 미설정 시 로컬 개발 기본값(`http://localhost:3000`, `http://localhost:5173`, `http://127.0.0.1:3000`, `http://127.0.0.1:5173`)을 허용한다. 이 API는 쿠키/세션을 쓰지 않으므로 `credentials: "include"`는 필요 없다.
 
 ## HTTP 상태 코드
 
@@ -620,10 +621,11 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 (`agentMode: "FALLBACK"`), Agent가 후보 준비 이후 마무리 단계에서만 실패하면 이미 준비된 후보를 그대로 쓰면서
 `fallbackReason: "AGENT_FINALIZATION_FAILED_AFTER_PREPARE"`를 반환한다.
 
-`calendarMode`는 이번 조회에 **실제로 사용한** 모드를 정직하게 반환한다 — 실제 Google Calendar LIVE 조회(바쁜 시간 조회)는
-아직 구현되지 않아(`create_event`만 LIVE 시도) `CALENDAR_MODE=LIVE`로 설정해도 실제로는 CACHED fixture를 사용하며, 이 경우
-`calendarMode: "CACHED"`와 `fallbackReason: "CALENDAR_LIVE_LOOKUP_NOT_IMPLEMENTED"`를 반환한다(`AGENT_MODE`와는 독립적).
-`fallbackReason`에 Agent 관련 사유와 동시에 해당하면 `"; "`로 이어붙여 반환한다.
+`calendarMode`는 이번 조회에 **실제로 사용한** 모드를 정직하게 반환한다(`AGENT_MODE`와는 독립적). `CALENDAR_MODE=LIVE`면
+Agent Tool `get_calendar_busy_times`가 실제 Google Calendar Free/Busy(`freebusy.query`)를 조회해 겹치는 슬롯을 제외한다.
+LIVE 조회가 실패하면(인증 만료, 네트워크 오류 등) CACHED fixture로 자동 fallback하며, 이때 `calendarMode: "CACHED"`와
+`fallbackReason: "CALENDAR_LIVE_BUSY_FAILED: <예외타입>"`을 반환한다. `fallbackReason`에 Agent 관련 사유와 동시에
+해당하면 `"; "`로 이어붙여 반환한다.
 
 ### Response 400
 
@@ -642,13 +644,12 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 1. **조회**: `candidate_id`로 인메모리 candidate를 조회한다. 없으면 404 `CANDIDATE_NOT_FOUND`.
 2. **멱등 처리**: `status`가 이미 `CONFIRMED`면 재확인·예약 시뮬레이션·Calendar 이벤트 생성을 다시 하지 않고, 최초 확정 시 저장해둔 응답을 그대로 반환한다(`confirmationCode`/`eventId`도 새로 만들지 않는다).
 3. `status`가 `PREPARED`도 `CONFIRMED`도 아니면(방어적 이상 상태) 409 `INVALID_CANDIDATE_STATUS`.
-4. **재확인**: 결정론 코드로 Google Calendar 바쁜 시간을 다시 조회해, 슬롯 검색 때 쓰는 것과 동일한 순수 충돌 판정 함수로 겹침을 확인한다(Agent 아님).
+4. **재확인**: `CALENDAR_MODE`에 따라 Google Calendar 바쁜 시간을 다시 조회해, 슬롯 검색 때 쓰는 것과 동일한 순수 충돌 판정 함수로 겹침을 확인한다(Agent 아님). **`CALENDAR_MODE=LIVE`인데 이 재조회가 실패해 CACHED로 대체됐다면, 그 CACHED 데이터로 조용히 확정하지 않고 502 `EXTERNAL_SERVICE_ERROR`로 안전하게 실패한다** — `/analyses`·`/schedule`·`/retry`의 "LIVE 실패 시 CACHED로 자동 fallback" 정책과 달리, 예약 확정 직전의 안전성 검증이라 더 엄격하다.
 5. 새 충돌이 있으면 409 `CALENDAR_CONFLICT` — candidate는 `PREPARED`로 유지되고 Calendar 이벤트 생성 함수는 호출되지 않는다.
 6. 충돌이 없으면 네일샵 예약 성공을 시뮬레이션한다(`shopBooking`, 항상 시뮬레이션. `confirmationCode`는 이 시점에 한 번만 생성).
 7. `CALENDAR_MODE`에 따라 Calendar 이벤트를 처리한다:
    - `CACHED`: 실제 이벤트를 생성하지 않는다.
-   - `LIVE`: 실제 Google Calendar 이벤트 생성을 시도한다. **생성에 성공했을 때만** candidate를 `CONFIRMED`로 바꾼다. 실패하면 502 `EXTERNAL_SERVICE_ERROR`이며 candidate는 `PREPARED`로 유지된다.
-     이 저장소에는 아직 실제 Google Calendar OAuth 연동이 없다 — 따라서 **지금은 `CALENDAR_MODE=LIVE`로 confirm을 호출하면 항상 502가 정상 동작**이다(가짜 성공 이벤트를 만들지 않는다).
+   - `LIVE`: `events().insert()`로 실제 Google Calendar 이벤트를 1개 생성한다(제목 "슬슬 · 네일 예약", 참석자/Google Meet/알림 메일 없음). **생성(또는 같은 candidate로 이미 만들어진 이벤트 재확인)에 성공했을 때만** candidate를 `CONFIRMED`로 바꾼다. 실패하면 502 `EXTERNAL_SERVICE_ERROR`이며 candidate는 `PREPARED`로 유지된다. 같은 candidate를 두 번 confirm해도 이벤트는 1개만 생성된다(candidate_id로부터 결정론적으로 만든 Google event ID를 재사용).
 8. 모든 필수 처리가 성공한 뒤에만 candidate를 `CONFIRMED`로 바꾸고 `confirmedAt`과 확정 결과를 저장한다.
 
 ### Path Parameters
@@ -704,12 +705,12 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 같은 `candidate_id`로 다시 호출해도 최초 확정 시 응답과 완전히 동일한 JSON이 그대로 반환된다(`confirmedAt`, `shopBooking.confirmationCode`, `calendarEvent` 전부 동일). 이벤트를 다시 생성하거나 `confirmationCode`를 다시 만들지 않는다.
 
-### Response 200 — `CALENDAR_MODE=LIVE` (실제 연동 완료 이후, 성공 시)
+### Response 200 — `CALENDAR_MODE=LIVE` (성공 시)
 
-`calendarEvent`만 다음과 같이 달라진다. **실제 OAuth 연동이 아직 없어 이 응답은 향후 구현 이후에만 발생한다** — 지금은 아래 502 응답이 정상이다.
+`calendarEvent`만 다음과 같이 달라지고 나머지 필드 구조는 CACHED와 동일하다. `eventId`/`htmlLink`는 실제 Google Calendar 값이다.
 
 ```json
-{ "created": true, "simulated": false, "eventId": "g_evt_abc123", "htmlLink": "https://calendar.google.com/event?eid=..." }
+{ "created": true, "simulated": false, "eventId": "sls8c21e830b145c94a8a9f839f985c207ec510b7f6", "htmlLink": "https://www.google.com/calendar/event?eid=..." }
 ```
 
 ### Response 404
@@ -742,13 +743,131 @@ analysis의 `reversePlan`을 `recommendedWindow`로 사용해 Agent가 다음 �
 
 candidate는 `PREPARED` 상태로 유지되며, Calendar 이벤트 생성 함수는 호출되지 않는다.
 
-### Response 502 — `CALENDAR_MODE=LIVE` 이벤트 생성 실패 (현재는 항상 이 응답)
+### Response 502 — `CALENDAR_MODE=LIVE` 이벤트 생성 실패 또는 재확인 실패
 
 ```json
 { "code": "EXTERNAL_SERVICE_ERROR", "message": "Google Calendar 이벤트 생성에 실패했습니다: ...", "detail": null }
 ```
 
-candidate는 `PREPARED` 상태로 유지된다(`CONFIRMED`로 바뀌지 않는다).
+이벤트 생성(`events().insert()`) 실패, 또는 승인 직전 Free/Busy 재확인이 LIVE로 성공하지 못한 경우 모두 이 응답이다.
+candidate는 `PREPARED` 상태로 유지된다(`CONFIRMED`로 바뀌지 않으며 `eventId`/`htmlLink`도 저장되지 않는다).
+
+---
+
+## 프론트엔드 연동 흐름 (ID 전달 관계)
+
+각 호출의 응답에서 ID를 꺼내 다음 호출에 그대로 전달한다. 고정 ID는 없다 — 매 실행마다 새로 발급된다.
+
+```
+POST /api/albums/connect          -> response.albumId            (예: "album-001")
+       │
+       ▼  { albumId }
+POST /api/analyses                -> response.analysisId         (예: "analysis_20260810094100_7843")
+       │                             response.canSchedule로 다음 단계 노출 여부 결정
+       ▼  (path: analysis_id)
+POST /api/analyses/{id}/schedule  -> response.candidates[].candidateId
+       │                             (여러 개, 최대 3개 — 사용자가 카드 중 하나 선택)
+       │
+       │  (마음에 드는 후보가 없으면)
+       ├─▶ POST /api/analyses/{id}/retry { searchScope: "NEXT_WEEK" }
+       │        -> response.candidates[].candidateId (새 후보, 기존 후보와 병행 표시 가능)
+       ▼  (path: candidate_id, 위 둘 중 선택한 candidateId)
+POST /api/bookings/{candidateId}/confirm -> response.status === "CONFIRMED"
+```
+
+- `GET /api/health`는 체인에 속하지 않는다 — 서버 기동 확인용으로 아무 때나 호출 가능하다.
+- `POST /api/analyses`의 `canSchedule`이 `false`면 `/schedule`을 호출할 수 없다(409). 이 경우 프론트는
+  "지금은 예약할 시점이 아니다"라는 화면만 보여주고 흐름을 종료한다.
+- `/schedule`과 `/retry`의 `candidates`는 서로 다른 실행(run)의 결과이며 `candidateId`가 겹치지 않는다.
+  `/retry`를 호출해도 `/schedule`의 기존 후보 카드는 사라지지 않는다 — 프론트가 둘을 합쳐서 보여줄지,
+  최신 것만 보여줄지는 UI 설계에 달려 있다.
+- `confirm`은 `candidateId`만 있으면 되고 `analysisId`는 필요 없다(경로에 없음).
+
+## 프론트엔드 요청 예시
+
+`fetch` 예시. 모든 ID는 직전 응답에서 동적으로 읽는다(아래 `analysisId`/`candidateId` 같은 고정 문자열은
+없다 — 반드시 실행 시점의 실제 응답 값을 써야 한다). `credentials`는 이 API가 쿠키/세션을 쓰지 않으므로
+생략해도 된다.
+
+```javascript
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+// 1. 서버 상태 확인 (선택)
+const health = await fetch(`${BASE_URL}/api/health`).then((r) => r.json());
+
+// 2. 데모 앨범 연결
+const album = await fetch(`${BASE_URL}/api/albums/connect`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ source: "DEMO" }),
+}).then((r) => r.json());
+const albumId = album.albumId;
+
+// 3. 분석 실행 (Agent 미실행)
+const analysis = await fetch(`${BASE_URL}/api/analyses`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ albumId }),
+}).then((r) => r.json());
+const analysisId = analysis.analysisId;
+
+if (!analysis.canSchedule) {
+  // careStatus/upcomingEvent만 보여주고 흐름 종료
+} else {
+  // 4. 예약 후보 탐색 (Agent 최초 실행)
+  const schedule = await fetch(`${BASE_URL}/api/analyses/${analysisId}/schedule`, {
+    method: "POST",
+  }).then((r) => r.json());
+
+  // 5. 후보 카드 중 하나 선택 (사용자 UI 선택 — 여기서는 첫 번째 예시)
+  const chosen = schedule.candidates[0];
+  const candidateId = chosen.candidateId;
+
+  // 6. 승인 (여기서만 실제 Google Calendar 이벤트가 생성될 수 있다 - CALENDAR_MODE=LIVE일 때)
+  const confirmRes = await fetch(`${BASE_URL}/api/bookings/${candidateId}/confirm`, {
+    method: "POST",
+  });
+  if (!confirmRes.ok) {
+    const err = await confirmRes.json(); // { code, message, detail }
+    // err.code로 분기: CALENDAR_CONFLICT(409) / CANDIDATE_NOT_FOUND(404) / EXTERNAL_SERVICE_ERROR(502) 등
+  } else {
+    const confirmed = await confirmRes.json();
+    // confirmed.calendarEvent.created / simulated / eventId / htmlLink
+  }
+
+  // 7. (선택) 후보가 마음에 안 들면 다음 주 후보 재탐색
+  const retry = await fetch(`${BASE_URL}/api/analyses/${analysisId}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ searchScope: "NEXT_WEEK" }),
+  }).then((r) => r.json());
+}
+```
+
+동일한 흐름의 `curl` 예시(터미널 데모/디버깅용). `$(...)`로 직전 응답에서 ID를 뽑아 다음 호출에 넘긴다.
+
+```bash
+BASE_URL=http://localhost:8000
+
+curl -s "$BASE_URL/api/health"
+
+ALBUM_ID=$(curl -s -X POST "$BASE_URL/api/albums/connect" \
+  -H "Content-Type: application/json" -d '{"source":"DEMO"}' | jq -r '.albumId')
+
+ANALYSIS_ID=$(curl -s -X POST "$BASE_URL/api/analyses" \
+  -H "Content-Type: application/json" -d "{\"albumId\":\"$ALBUM_ID\"}" | jq -r '.analysisId')
+
+CANDIDATE_ID=$(curl -s -X POST "$BASE_URL/api/analyses/$ANALYSIS_ID/schedule" | jq -r '.candidates[0].candidateId')
+
+curl -s -X POST "$BASE_URL/api/bookings/$CANDIDATE_ID/confirm"
+
+# 후보가 마음에 안 들면:
+curl -s -X POST "$BASE_URL/api/analyses/$ANALYSIS_ID/retry" \
+  -H "Content-Type: application/json" -d '{"searchScope":"NEXT_WEEK"}'
+```
+
+`backend/scripts/demo_e2e.py`가 이 흐름 전체를 실행하는 참조 클라이언트 스크립트다(터미널에서 사람이 읽기
+좋은 요약만 출력한다). 실행 방법은 `docs/demo-scenario.md`와 스크립트 자체의 `--help`를 참고한다.
 
 ---
 
